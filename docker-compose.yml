@@ -1,0 +1,30 @@
+services:
+  api:
+    build: ./backend
+    env_file: ./backend/.env.dev
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy   # ✅ DB sağlıklı olmadan API başlamasın
+
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_DATABASE: app
+      MYSQL_USER: app
+      MYSQL_PASSWORD: app_pass
+      MYSQL_ROOT_PASSWORD: root_pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:                     # ✅ MySQL hazır mı kontrol et
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql_data:
