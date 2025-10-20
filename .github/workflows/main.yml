@@ -1,0 +1,46 @@
+name: Simple ReadOnly API Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test-api:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Compose Up
+        run: |
+          docker compose up -d --build
+          echo "Waiting for API..."
+          for i in {1..20}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
+            if [ "$code" = "200" ]; then echo "API is ready!"; break; fi
+            sleep 2
+          done
+
+      - name: Test GET Endpoints
+        run: |
+          curl -f http://localhost:8000/universities
+          curl -f http://localhost:8000/users
+          curl -f http://localhost:8000/event_types
+          curl -f http://localhost:8000/events
+          curl -f http://localhost:8000/applications
+          curl -f http://localhost:8000/participants
+          curl -f http://localhost:8000/ratings
+
+      - name: Show Logs if Failure
+        if: failure()
+        run: |
+          docker compose logs api
+          docker compose logs db
+
+      - name: Docker Compose Down
+        if: always()
+        run: docker compose down
