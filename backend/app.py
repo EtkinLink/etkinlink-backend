@@ -39,7 +39,6 @@ def users():
                 user.pop("password_hash", None)
                 user.pop("photo_url", None)
 
-                # Total ve attended hesapla
                 total_events = conn.execute(text("""
                     SELECT COUNT(*)
                     FROM participants
@@ -52,7 +51,6 @@ def users():
                     WHERE user_id = :id AND status = 'ATTENDED'
                 """), {"id": user_id}).scalar()
 
-                # Attendance Rate hesapla
                 if total_events == 0:
                     attendance_rate = "No participation yet"
                 else:
@@ -62,8 +60,7 @@ def users():
 
                 return jsonify(user)
 
-            # ID yoksa tüm kullanıcılar
-            result = conn.execute(text("SELECT * FROM users"))
+            result = conn.execute(text("SELECT id, name, username, email FROM users"))
             users_list = [dict(r._mapping) for r in result]
             return jsonify(users_list)
 
