@@ -129,4 +129,96 @@ CREATE TABLE ratings (
 
 ) ENGINE=InnoDB;
 
+INSERT INTO universities (name) VALUES
+  ('Istanbul Technical University'),
+  ('Bogazici University'),
+  ('Middle East Technical University'),
+  ('Koc University'),
+  ('Sabanci University'),
+  ('Yildiz Technical University'),
+  ('Bilkent University'),
+  ('Ankara University'),
+  ('Ege University'),
+  ('Hacettepe University');
+
+INSERT INTO users (name, username, email, password_hash, photo_url, latitude, longitude, role, university_id)
+VALUES
+  ('Onat Budak', 'onat', 'onat@example.com', 'hash1', NULL, 41.1050, 29.0250, 'USER', 1),
+  ('Ada Lovelace', 'ada', 'ada@example.com', 'hash2', NULL, 41.0853, 29.0434, 'ADMIN', 1),
+  ('Grace Hopper', 'grace', 'grace@example.com', 'hash3', NULL, 39.9334, 32.8597, 'USER', 3),
+  ('Alan Turing', 'alant', 'turing@example.com', 'hash4', NULL, 51.5074, -0.1278, 'USER', 2),
+  ('Linus Torvalds', 'linus', 'linus@example.com', 'hash5', NULL, 60.1699, 24.9384, 'USER', 5),
+  ('Elon Musk', 'elon', 'elon@example.com', 'hash6', NULL, 34.0522, -118.2437, 'USER', 4),
+  ('Mark Zuckerberg', 'markz', 'mark@example.com', 'hash7', NULL, 37.4848, -122.1484, 'USER', 6),
+  ('Bill Gates', 'billg', 'bill@example.com', 'hash8', NULL, 47.6062, -122.3321, 'USER', 7),
+  ('Steve Jobs', 'jobs', 'jobs@example.com', 'hash9', NULL, 37.3348, -122.0090, 'USER', 4),
+  ('Dennis Ritchie', 'dennis', 'dennis@example.com', 'hash10', NULL, 40.7128, -74.0060, 'USER', 2);
+
+
+INSERT INTO event_types (code) VALUES
+ ('TECH'),
+ ('MUSIC'),
+ ('PARTY'),
+ ('EDUCATION'),
+ ('SPORTS'),
+ ('GAME'),
+ ('CAREER'),
+ ('SEMINAR'),
+ ('BUSINESS'),
+ ('SOCIAL');
+
+INSERT INTO events (owner_user_id, title, explanation, type_id, price, starts_at, photo_url, status, user_limit, latitude, longitude)
+VALUES
+ (1, 'Tech Meetup', 'Monthly ITU tech meetup', 1, 0, '2025-01-10 18:00:00', NULL, 'FUTURE', 50, 41.1050, 29.0250),
+ (2, 'Jazz Night', 'Chill jazz music night', 2, 50, '2025-02-12 20:00:00', NULL, 'FUTURE', 100, 41.0892, 29.0501),
+ (3, 'Chess Tournament', 'Open Swiss chess tournament', 6, 20, '2025-03-05 10:00:00', NULL, 'FUTURE', 40, 39.9334, 32.8597),
+ (4, 'AI Seminar', 'Turing on machine learning', 8, 0, '2025-04-01 15:00:00', NULL, 'FUTURE', 200, 51.5074, -0.1278),
+ (5, 'Linux Workshop', 'Kernel development basics', 4, 15, '2025-03-22 13:00:00', NULL, 'FUTURE', 30, 60.1699, 24.9384),
+ (6, 'Startup Pitch', 'Elon hosts pitch event', 10, 0, '2025-02-01 19:00:00', NULL, 'FUTURE', 500, 34.0522, -118.2437),
+ (7, 'Hackathon', '48-hour hackathon', 1, 0, '2025-05-10 09:00:00', NULL, 'FUTURE', 150, 37.4848, -122.1484),
+ (8, 'Charity Marathon', 'Run for education', 5, 25, '2025-06-15 08:00:00', NULL, 'FUTURE', 1000, 47.6062, -122.3321),
+ (9, 'iOS Dev Talk', 'SwiftUI workshop', 4, 10, '2025-07-01 10:00:00', NULL, 'FUTURE', 80, 37.3348, -122.0090),
+ (10, 'C Programming', 'Dennis explains pointers', 4, 5, '2025-02-20 11:00:00', NULL, 'FUTURE', 60, 40.7128, -74.0060);
+
+INSERT INTO applications (event_id, user_id, why_me, status)
+VALUES
+ (1, 2, 'I love tech events', 'APPROVED'),
+ (1, 3, 'Interested in networking', 'PENDING'),
+ (2, 4, 'Jazz enthusiast', 'APPROVED'),
+ (2, 5, 'Love music', 'PENDING'),
+ (3, 6, 'Chess player', 'APPROVED'),
+ (3, 7, 'Want to improve chess skills', 'PENDING'),
+ (4, 8, 'AI researcher', 'APPROVED'),
+ (5, 9, 'Linux fan', 'APPROVED'),
+ (6, 10, 'Startup founder', 'APPROVED'),
+ (7, 3, 'Hackathon lover', 'PENDING');
+
+INSERT INTO participants (event_id, user_id, application_id, status)
+VALUES
+ (1, 2, 1, 'ATTENDED'),
+ (2, 4, 3, 'ATTENDED'),
+ (3, 6, 5, 'NO_SHOW'),
+ (4, 8, 7, 'ATTENDED'),
+ (5, 9, 8, 'ATTENDED'),
+ (6, 10, 9, 'ATTENDED'),
+ (7, 3, 10, 'NO_SHOW'),
+ (1, 3, 2, 'NO_SHOW'),
+ (2, 5, 4, 'ATTENDED'),
+ (3, 7, 6, 'ATTENDED');
+
+
+INSERT INTO ratings (event_id, user_id, rating, comment)
+VALUES
+ (1, 2, 5, 'Great event!'),
+ (2, 4, 4, 'Nice music'),
+ (3, 6, 3, 'Could be better organized'),
+ (4, 8, 5, 'Amazing talk!'),
+ (5, 9, 4, 'Very helpful workshop'),
+ (6, 10, 5, 'Loved the pitches'),
+ (7, 3, 4, 'Fun hackathon'),
+ (2, 5, 3, 'It was okay'),
+ (1, 3, 4, 'Good networking'),
+ (3, 7, 5, 'Loved the tournament');
+
+
 

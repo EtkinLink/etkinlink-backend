@@ -1,5 +1,5 @@
 import os
-from flask import Flask, jsonify
+from flask import request,Flask, jsonify
 from flask_cors import CORS
 from sqlalchemy import create_engine, text
 
@@ -23,12 +23,50 @@ def health():
 @app.get("/users")
 def users():
     try:
+        user_id = request.args.get("id")
+
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT * FROM users"))
-            rows = [dict(r._mapping) for r in result]
-        return jsonify(rows)
+            if user_id:
+                user_result = conn.execute(
+                    text("SELECT * FROM users WHERE id = :id"),
+                    {"id": user_id}
+                ).fetchone()
+
+                if not user_result:
+                    return {"error": "User not found"}, 404
+
+                user = dict(user_result._mapping)
+                user.pop("password_hash", None)
+                user.pop("photo_url", None)
+
+                total_events = conn.execute(text("""
+                    SELECT COUNT(*)
+                    FROM participants
+                    WHERE user_id = :id
+                """), {"id": user_id}).scalar()
+
+                attended_events = conn.execute(text("""
+                    SELECT COUNT(*)
+                    FROM participants
+                    WHERE user_id = :id AND status = 'ATTENDED'
+                """), {"id": user_id}).scalar()
+
+                if total_events == 0:
+                    attendance_rate = "No participation yet"
+                else:
+                    attendance_rate = f"{round((attended_events / total_events) * 100, 2)}%"
+
+                user["attendance_rate"] = attendance_rate
+
+                return jsonify(user)
+
+            result = conn.execute(text("SELECT id, name, username, email FROM users"))
+            users_list = [dict(r._mapping) for r in result]
+            return jsonify(users_list)
+
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 
 @app.get("/universities")
