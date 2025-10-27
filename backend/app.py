@@ -1,13 +1,36 @@
 import os
+import jwt
 from flask import request,Flask, jsonify
 from flask_cors import CORS
 from sqlalchemy import create_engine, text
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 CORS(app)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+SECRET_KEY = os.getenv("SECRET_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+
+
+
+@app.post("/test-login")
+def test_login():
+    try:
+        user_id = request.json.get("user_id")
+        if not user_id:
+            return {"error": "user_id required"}, 400
+
+        payload = {
+            "userId": user_id,
+            "exp": datetime.utcnow() + timedelta(hours=2)
+        }
+
+        token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+        return {"access_token": token}
+
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 @app.get("/health")
 def health():
@@ -20,49 +43,59 @@ def health():
         return {"ok": False, "error": str(e)}, 503
     
 
-@app.get("/users")
-def users():
+
+@app.get("/users/me")
+def get_my_profile():
     try:
-        user_id = request.args.get("id")
+        
+        auth_header = request.headers.get("Authorization")
+
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return {"error": "Authorization header missing or invalid"}, 401
+
+        token = auth_header.split(" ")[1]
+
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get("userId")
+            if not user_id:
+                return {"error": "Invalid token: userId missing"}, 401
+        except jwt.ExpiredSignatureError:
+            return {"error": "Token expired"}, 401
+        except jwt.InvalidTokenError:
+            return {"error": "Invalid token"}, 401
 
         with engine.connect() as conn:
-            if user_id:
-                user_result = conn.execute(
-                    text("SELECT * FROM users WHERE id = :id"),
-                    {"id": user_id}
-                ).fetchone()
+            user_result = conn.execute(
+                text("SELECT * FROM users WHERE id = :id"),
+                {"id": user_id}
+            ).fetchone()
 
-                if not user_result:
-                    return {"error": "User not found"}, 404
+            if not user_result:
+                return {"error": "User not found"}, 404
 
-                user = dict(user_result._mapping)
-                user.pop("password_hash", None)
-                user.pop("photo_url", None)
+            user = dict(user_result._mapping)
+            user.pop("password_hash", None)
+            user.pop("photo_url", None)
 
-                total_events = conn.execute(text("""
-                    SELECT COUNT(*)
-                    FROM participants
-                    WHERE user_id = :id
-                """), {"id": user_id}).scalar()
+            total_events = conn.execute(
+                text("SELECT COUNT(*) FROM participants WHERE user_id = :id"),
+                {"id": user_id}
+            ).scalar()
 
-                attended_events = conn.execute(text("""
-                    SELECT COUNT(*)
-                    FROM participants
-                    WHERE user_id = :id AND status = 'ATTENDED'
-                """), {"id": user_id}).scalar()
+            attended_events = conn.execute(
+                text("SELECT COUNT(*) FROM participants WHERE user_id = :id AND status = 'ATTENDED'"),
+                {"id": user_id}
+            ).scalar()
 
-                if total_events == 0:
-                    attendance_rate = "No participation yet"
-                else:
-                    attendance_rate = f"{round((attended_events / total_events) * 100, 2)}%"
+            if total_events == 0:
+                attendance_rate = "No participation yet"
+            else:
+                attendance_rate = f"{round((attended_events / total_events) * 100, 2)}%"
 
-                user["attendance_rate"] = attendance_rate
+            user["attendance_rate"] = attendance_rate
 
-                return jsonify(user)
-
-            result = conn.execute(text("SELECT id, name, username, email FROM users"))
-            users_list = [dict(r._mapping) for r in result]
-            return jsonify(users_list)
+            return jsonify(user)
 
     except Exception as e:
         return {"error": str(e)}, 503
