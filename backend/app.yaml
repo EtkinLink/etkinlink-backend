@@ -1,0 +1,11 @@
+runtime: python311
+
+entrypoint: gunicorn -b :$PORT app:app
+
+# Çevresel Değişkenler: Flask kodunuzun beklediği DATABASE_URL değişkenini ayarlar.
+env_variables:
+  DATABASE_URL: "mysql+pymysql://root:Etkinlink.07@/etkinlik_db?unix_socket=/cloudsql/etkinlink:europe-west9:etkinlink"
+
+# Cloud SQL Bağlantı Ayarı: App Engine'in Cloud SQL proxy'sini etkinleştirir.
+beta_settings:
+  cloud_sql_instances: etkinlink:europe-west9:etkinlink
