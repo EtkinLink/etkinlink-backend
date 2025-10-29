@@ -311,6 +311,84 @@ def participants():
     except Exception as e:
         return {"error": str(e)}, 503
 
+@app.post("/ratings")
+def create_rating():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return {"error": "Authorization header missing or invalid"}, 401
+
+        token = auth_header.split(" ", 1)[1]
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get("userId")
+            if not user_id:
+                return {"error": "Invalid token: userId missing"}, 401
+        except jwt.ExpiredSignatureError:
+            return {"error": "Token expired"}, 401
+        except jwt.InvalidTokenError:
+            return {"error": "Invalid token"}, 401
+
+        data = request.get_json()
+        if not data:
+            return {"error": "No JSON data provided"}, 400
+
+        event_id = data.get("event_id")
+        rating = data.get("rating")
+        comment = data.get("comment", "").strip()
+
+        if not event_id:
+            return {"error": "event_id is required"}, 400
+        if rating is None:
+            return {"error": "rating is required"}, 400
+
+        try:
+            rating_int = int(rating)
+            if not (1 <= rating_int <= 5):
+                return {"error": "Rating must be an integer between 1 and 5"}, 400
+        except (ValueError, TypeError):
+            return {"error": "Rating must be an integer"}, 400
+
+        with engine.connect() as conn:
+            
+            existing_rating = conn.execute(
+                text("SELECT id FROM ratings WHERE user_id = :user_id AND event_id = :event_id"),
+                {"user_id": user_id, "event_id": event_id}
+            ).fetchone()
+
+            if existing_rating:
+                return {"error": "You have already rated this event"}, 409
+
+            sql = text("""
+                INSERT INTO ratings (user_id, event_id, rating, comment)
+                VALUES (:user_id, :event_id, :rating, :comment)
+                RETURNING id, user_id, event_id, rating, comment
+            """)
+            
+            params = {
+                "user_id": user_id,
+                "event_id": event_id,
+                "rating": rating_int,
+                "comment": comment
+            }
+            
+            result = conn.execute(sql, params)
+            new_rating = result.fetchone()
+            conn.commit()
+
+        if not new_rating:
+            return {"error": "Could not create rating"}, 500
+
+        return jsonify(dict(new_rating._mapping)), 201
+
+    except Exception as e:
+        if "UNIQUE constraint" in str(e) or "uq_rating_event_user" in str(e):
+            return {"error": "You have already rated this event"}, 409
+        if "FOREIGN KEY constraint" in str(e):
+             return {"error": "Invalid event_id"}, 404
+        
+        return {"error": str(e)}, 503
+    
 
 @app.get("/ratings")
 def ratings():
