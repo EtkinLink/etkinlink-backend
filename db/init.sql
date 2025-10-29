@@ -43,11 +43,16 @@ CREATE TABLE events (
   type_id         BIGINT UNSIGNED,               
   price           DECIMAL(10,2) NOT NULL,
   starts_at       DATETIME NOT NULL,
+  ends_at         DATETIME,
+  location_name   VARCHAR(500),
   photo_url       VARCHAR(500),
   status          ENUM('FUTURE','COMPLETED') NOT NULL DEFAULT 'FUTURE',
   user_limit      INT UNSIGNED,              
   latitude        DECIMAL(9,6),
   longitude       DECIMAL(9,6),
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+                  ON UPDATE CURRENT_TIMESTAMP,
 
 
   CONSTRAINT fk_events_owner
@@ -167,18 +172,52 @@ INSERT INTO event_types (code) VALUES
  ('BUSINESS'),
  ('SOCIAL');
 
-INSERT INTO events (owner_user_id, title, explanation, type_id, price, starts_at, photo_url, status, user_limit, latitude, longitude)
+INSERT INTO events (
+  owner_user_id, title, explanation, type_id, price,
+  starts_at, ends_at, location_name, photo_url,
+  status, user_limit, latitude, longitude, created_at, updated_at
+)
 VALUES
- (1, 'Tech Meetup', 'Monthly ITU tech meetup', 1, 0, '2025-01-10 18:00:00', NULL, 'FUTURE', 50, 41.1050, 29.0250),
- (2, 'Jazz Night', 'Chill jazz music night', 2, 50, '2025-02-12 20:00:00', NULL, 'FUTURE', 100, 41.0892, 29.0501),
- (3, 'Chess Tournament', 'Open Swiss chess tournament', 6, 20, '2025-03-05 10:00:00', NULL, 'FUTURE', 40, 39.9334, 32.8597),
- (4, 'AI Seminar', 'Turing on machine learning', 8, 0, '2025-04-01 15:00:00', NULL, 'FUTURE', 200, 51.5074, -0.1278),
- (5, 'Linux Workshop', 'Kernel development basics', 4, 15, '2025-03-22 13:00:00', NULL, 'FUTURE', 30, 60.1699, 24.9384),
- (6, 'Startup Pitch', 'Elon hosts pitch event', 10, 0, '2025-02-01 19:00:00', NULL, 'FUTURE', 500, 34.0522, -118.2437),
- (7, 'Hackathon', '48-hour hackathon', 1, 0, '2025-05-10 09:00:00', NULL, 'FUTURE', 150, 37.4848, -122.1484),
- (8, 'Charity Marathon', 'Run for education', 5, 25, '2025-06-15 08:00:00', NULL, 'FUTURE', 1000, 47.6062, -122.3321),
- (9, 'iOS Dev Talk', 'SwiftUI workshop', 4, 10, '2025-07-01 10:00:00', NULL, 'FUTURE', 80, 37.3348, -122.0090),
- (10, 'C Programming', 'Dennis explains pointers', 4, 5, '2025-02-20 11:00:00', NULL, 'FUTURE', 60, 40.7128, -74.0060);
+  (1, 'Tech Meetup', 'Monthly ITU tech meetup', 1, 0,
+   '2025-01-10 18:00:00', '2025-01-10 21:00:00', 'ITU Ayazağa Kampüsü, SDKM', NULL,
+   'FUTURE', 50, 41.1050, 29.0250, NOW(), NOW()),
+
+  (2, 'Jazz Night', 'Chill jazz music night', 2, 50,
+   '2025-02-12 20:00:00', '2025-02-12 23:30:00', 'Bogazici University, Albert Long Hall', NULL,
+   'FUTURE', 100, 41.0892, 29.0501, NOW(), NOW()),
+
+  (3, 'Chess Tournament', 'Open Swiss chess tournament', 6, 20,
+   '2025-03-05 10:00:00', '2025-03-05 18:00:00', 'METU Culture and Convention Center', NULL,
+   'FUTURE', 40, 39.9334, 32.8597, NOW(), NOW()),
+
+  (4, 'AI Seminar', 'Turing on machine learning', 8, 0,
+   '2025-04-01 15:00:00', '2025-04-01 17:00:00', 'University College London, Hall A', NULL,
+   'FUTURE', 200, 51.5074, -0.1278, NOW(), NOW()),
+
+  (5, 'Linux Workshop', 'Kernel development basics', 4, 15,
+   '2025-03-22 13:00:00', '2025-03-22 16:00:00', 'Kumpula Campus, Helsinki University', NULL,
+   'FUTURE', 30, 60.1699, 24.9384, NOW(), NOW()),
+
+  (6, 'Startup Pitch', 'Elon hosts pitch event', 10, 0,
+   '2025-02-01 19:00:00', '2025-02-01 22:00:00', 'Silicon Valley Innovation Hub', NULL,
+   'FUTURE', 500, 34.0522, -118.2437, NOW(), NOW()),
+
+  (7, 'Hackathon', '48-hour hackathon', 1, 0,
+   '2025-05-10 09:00:00', '2025-05-12 09:00:00', 'Facebook HQ, Menlo Park', NULL,
+   'FUTURE', 150, 37.4848, -122.1484, NOW(), NOW()),
+
+  (8, 'Charity Marathon', 'Run for education', 5, 25,
+   '2025-06-15 08:00:00', '2025-06-15 12:00:00', 'Seattle City Marathon Route', NULL,
+   'FUTURE', 1000, 47.6062, -122.3321, NOW(), NOW()),
+
+  (9, 'iOS Dev Talk', 'SwiftUI workshop', 4, 10,
+   '2025-07-01 10:00:00', '2025-07-01 13:00:00', 'Apple Park Auditorium', NULL,
+   'FUTURE', 80, 37.3348, -122.0090, NOW(), NOW()),
+
+  (10, 'C Programming', 'Dennis explains pointers', 4, 5,
+   '2025-02-20 11:00:00', '2025-02-20 13:00:00', 'New York Tech Hub', NULL,
+   'FUTURE', 60, 40.7128, -74.0060, NOW(), NOW());
+
 
 INSERT INTO applications (event_id, user_id, why_me, status)
 VALUES

@@ -167,10 +167,123 @@ def event_types():
 
 
 @app.get("/events")
-def events():
+def get_events():
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT * FROM events"))
+            query = text("""
+                SELECT 
+                    e.id, e.title, e.explanation, e.price, e.starts_at, e.ends_at, e.location_name ,e.status,
+                    e.user_limit, e.latitude, e.longitude, e.created_at, e.updated_at,
+                    u.username AS owner_username,
+                    et.code AS event_type,
+                    (SELECT COUNT(*) FROM participants p WHERE p.event_id = e.id) AS participant_count
+                FROM events e
+                LEFT JOIN users u ON e.owner_user_id = u.id
+                LEFT JOIN event_types et ON e.type_id = et.id
+                ORDER BY e.starts_at ASC
+            """)
+            result = conn.execute(query)
+            rows = [dict(r._mapping) for r in result]
+        return jsonify(rows)
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+@app.get("/events/<int:event_id>")
+def get_event_by_id(event_id):
+    try:
+        with engine.connect() as conn:
+            event = conn.execute(text("""
+                SELECT 
+                    e.id, e.title, e.explanation, e.price, e.starts_at,e.ends_at, e.location_name, e.status,
+                    e.user_limit, e.latitude, e.longitude, e.created_at, e.updated_at,
+                    u.username AS owner_username,
+                    et.code AS event_type
+                FROM events e
+                LEFT JOIN users u ON e.owner_user_id = u.id
+                LEFT JOIN event_types et ON e.type_id = et.id
+                WHERE e.id = :id
+            """), {"id": event_id}).fetchone()
+
+            if not event:
+                return {"error": "Event not found"}, 404
+
+            participants = conn.execute(text("""
+                SELECT u.id, u.username, p.status
+                FROM participants p
+                JOIN users u ON u.id = p.user_id
+                WHERE p.event_id = :id
+            """), {"id": event_id}).fetchall()
+
+        event_data = dict(event._mapping)
+        event_data["participants"] = [dict(p._mapping) for p in participants]
+        return jsonify(event_data)
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@app.get("/events/filter")
+def filter_events():
+    try:
+        type_code = request.args.get("type")
+        from_date = request.args.get("from")
+        to_date = request.args.get("to")
+        search = request.args.get("q")
+
+        filters = []
+        params = {}
+
+        if type_code:
+            filters.append("et.code = :type_code")
+            params["type_code"] = type_code
+
+        if from_date:
+            filters.append("e.starts_at >= :from_date")
+            params["from_date"] = from_date
+
+        if to_date:
+            filters.append("e.starts_at <= :to_date")
+            params["to_date"] = to_date
+
+        if search:
+            filters.append("e.title LIKE :search")
+            params["search"] = f"%{search}%"
+
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+
+        with engine.connect() as conn:
+            query = text(f"""
+                SELECT 
+                    e.id, e.title, e.starts_at,e.ends_at,e.location_name, e.status, e.created_at ,et.code AS event_type, 
+                    u.username AS owner_username
+                FROM events e
+                LEFT JOIN event_types et ON e.type_id = et.id
+                LEFT JOIN users u ON e.owner_user_id = u.id
+                {where_clause}
+                ORDER BY e.starts_at ASC
+            """)
+            result = conn.execute(query, params)
+            rows = [dict(r._mapping) for r in result]
+        return jsonify(rows)
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@app.get("/users/<int:user_id>/events")
+def get_user_events(user_id):
+    try:
+        with engine.connect() as conn:
+            query = text("""
+                SELECT 
+                    e.id, e.title, e.starts_at, e.ends_at, e.location_name ,e.status, e.created_at
+                    et.code AS event_type,
+                    p.status AS participation_status
+                FROM participants p
+                JOIN events e ON e.id = p.event_id
+                LEFT JOIN event_types et ON e.type_id = et.id
+                WHERE p.user_id = :uid
+                ORDER BY e.starts_at DESC
+            """)
+            result = conn.execute(query, {"uid": user_id})
             rows = [dict(r._mapping) for r in result]
         return jsonify(rows)
     except Exception as e:
