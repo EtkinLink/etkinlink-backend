@@ -4,6 +4,7 @@ from flask import request,Flask, jsonify
 from flask_cors import CORS
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
+import re
 
 app = Flask(__name__)
 CORS(app)
@@ -44,17 +45,15 @@ def health():
     
 
 
-@app.get("/users/me")
-def get_my_profile():
+@app.route("/users/me", methods=["GET", "PUT"])
+def users_me():
     try:
         
         auth_header = request.headers.get("Authorization")
-
         if not auth_header or not auth_header.startswith("Bearer "):
             return {"error": "Authorization header missing or invalid"}, 401
 
-        token = auth_header.split(" ")[1]
-
+        token = auth_header.split(" ", 1)[1]
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             user_id = payload.get("userId")
@@ -65,37 +64,77 @@ def get_my_profile():
         except jwt.InvalidTokenError:
             return {"error": "Invalid token"}, 401
 
-        with engine.connect() as conn:
-            user_result = conn.execute(
-                text("SELECT * FROM users WHERE id = :id"),
-                {"id": user_id}
-            ).fetchone()
+        
+        if request.method == "GET":
+            with engine.connect() as conn:
+                user_row = conn.execute(
+                    text("SELECT  username, name, email FROM users WHERE id = :id"),
+                    {"id": user_id}
+                ).fetchone()
 
-            if not user_result:
-                return {"error": "User not found"}, 404
+                if not user_row:
+                    return {"error": "User not found"}, 404
 
-            user = dict(user_result._mapping)
-            user.pop("password_hash", None)
-            user.pop("photo_url", None)
+                user = dict(user_row._mapping)
 
-            total_events = conn.execute(
-                text("SELECT COUNT(*) FROM participants WHERE user_id = :id"),
-                {"id": user_id}
-            ).scalar()
+                total_events = conn.execute(
+                    text("SELECT COUNT(*) FROM participants WHERE user_id = :id"),
+                    {"id": user_id}
+                ).scalar()
 
-            attended_events = conn.execute(
-                text("SELECT COUNT(*) FROM participants WHERE user_id = :id AND status = 'ATTENDED'"),
-                {"id": user_id}
-            ).scalar()
+                attended_events = conn.execute(
+                    text("SELECT COUNT(*) FROM participants WHERE user_id = :id AND status = 'ATTENDED'"),
+                    {"id": user_id}
+                ).scalar()
 
-            if total_events == 0:
-                attendance_rate = "No participation yet"
-            else:
-                attendance_rate = f"{round((attended_events / total_events) * 100, 2)}%"
+                if total_events == 0:
+                    attendance_rate = -1  
+                else:
+                    attendance_rate = int((attended_events * 100) // total_events)  
 
-            user["attendance_rate"] = attendance_rate
+                user["attendance_rate"] = attendance_rate
 
-            return jsonify(user)
+                return jsonify(user)
+
+        
+        if request.method == "PUT":
+            data = request.get_json(silent=True)
+            if not data:
+                return {"error": "No data provided"}, 400
+
+            allowed_fields = {"username"}  # ileride genişletilir
+            update_data = {k: v for k, v in data.items() if k in allowed_fields}
+
+            if not update_data:
+                return {"error": "No valid fields to update"}, 400
+
+            if "username" in update_data:
+                new_username = update_data["username"].strip()
+                if len(new_username) < 3:
+                    return {"error": "Username must be at least 3 characters"}, 400
+                if not re.match(r"^[a-zA-Z0-9_]+$", new_username):
+                    return {"error": "Username can only contain letters, numbers and _"}, 400
+
+                with engine.connect() as conn:
+                    exists = conn.execute(
+                        text("SELECT id FROM users WHERE username = :u AND id != :id"),
+                        {"u": new_username, "id": user_id}
+                    ).fetchone()
+
+                    if exists:
+                        return {"error": "Username already taken"}, 409
+
+            set_clause = ", ".join([f"{k} = :{k}" for k in update_data])
+            update_data["id"] = user_id
+
+            with engine.connect() as conn:
+                conn.execute(
+                    text(f"UPDATE users SET {set_clause} WHERE id = :id"),
+                    update_data
+                )
+                conn.commit()
+
+            return {"message": "Profile updated successfully", **update_data}
 
     except Exception as e:
         return {"error": str(e)}, 503
