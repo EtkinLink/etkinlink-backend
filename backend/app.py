@@ -274,7 +274,7 @@ def get_user_events(user_id):
         with engine.connect() as conn:
             query = text("""
                 SELECT 
-                    e.id, e.title, e.starts_at, e.ends_at, e.location_name ,e.status, e.created_at
+                    e.id, e.title, e.starts_at, e.ends_at, e.location_name ,e.status, e.created_at,
                     et.code AS event_type,
                     p.status AS participation_status
                 FROM participants p
