@@ -1,10 +1,13 @@
-import os
-import jwt
-from flask import request,Flask, jsonify
-from flask_cors import CORS
-from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
+from functools import wraps
+import os
 import re
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import jwt
+from sqlalchemy import create_engine, text
+from werkzeug.security import check_password_hash
 
 app = Flask(__name__)
 CORS(app)
@@ -152,7 +155,78 @@ def universities():
         return {"error": str(e)}, 503
 
 
+# Auth fonksiyonlari
+@app.post("/auth/register")
+def register():
+    ...
 
+
+@app.post("/auth/login")
+def login():
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return {"error": "Email and password are required."}, 400
+
+    try:
+        with engine.connect() as conn:
+            user_row = conn.execute(
+                text("SELECT id, password_hash FROM users WHERE email = :email"),
+                {"email": email}
+            ).fetchone()
+
+            if not user_row:
+                return {"error": "No registered account found."}, 401
+
+            user = dict(user_row._mapping)
+            stored_password_hash = user["password_hash"]
+
+            if not check_password_hash(stored_password_hash, password):
+                return {"error": "Incorrect password."}, 401
+            payload = {
+                "userId": user["id"],
+                "exp": datetime.now(datetime.timezone.utc) + timedelta(hours=2)
+            }
+
+            token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+            # response = jsonify({"message": "Login successful"})
+            # response.set_cookie(
+            #     'access_token', 
+            #     token,
+            #     # CSRF korumasi icin
+            #     httponly=True,
+            #     secure=True,
+            #     samesite='Strict',
+            #     max_age=7200  # 2 saat
+            # )
+            response = {"access_token": token}
+            
+            return response
+    except Exception as e:
+        return {"error": str(e)}, 503
+    
+
+def auth_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return {"error": "Authorization header missing or invalid"}, 401
+        token = auth_header.split(" ", 1)[1]
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get("userId")
+            if not user_id:
+                return {"error": "Invalid token: userId missing"}, 401
+            request.user_id = user_id
+            return f(*args, **kwargs)
+        except jwt.ExpiredSignatureError:
+            return {"error": "Token expired"}, 401
+        except jwt.InvalidTokenError:
+            return {"error": "Invalid token"}, 401
+    return decorated
 
 
 @app.get("/event_types")

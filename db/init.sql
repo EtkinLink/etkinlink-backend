@@ -10,7 +10,7 @@ CREATE TABLE users (
   id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   name            VARCHAR(120) NOT NULL,
   username        VARCHAR(60)  NOT NULL,
-  email           VARCHAR(254) NOT NULL,
+  email           VARCHAR(256) NOT NULL,
   password_hash   VARBINARY(100) NOT NULL,   
   photo_url       VARCHAR(500),              
   latitude        DECIMAL(9,6),              
