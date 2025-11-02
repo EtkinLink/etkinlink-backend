@@ -8,7 +8,7 @@ CREATE TABLE universities (
 CREATE TABLE university_domains (
   id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   university_id BIGINT UNSIGNED NOT NULL, 
-  domain        VARCHAR(100) NOT NULL, 
+  domain        VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL, 
   
   UNIQUE KEY uq_domain (domain), 
 

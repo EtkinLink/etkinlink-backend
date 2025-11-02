@@ -245,7 +245,7 @@ def login():
                 "exp": datetime.utcnow() + timedelta(hours=2)
             }
             token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-            response = {"access_token": token, "debug_info": s}
+            response = {"access_token": token}
 
             return response
     except Exception as e:
