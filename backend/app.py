@@ -1,5 +1,6 @@
 import os
 import jwt
+import bcrypt
 from flask import request,Flask, jsonify
 from flask_cors import CORS
 from sqlalchemy import create_engine, text
@@ -14,24 +15,107 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 
 
+@app.post("/register")
+def register():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
 
-@app.post("/test-login")
-def test_login():
+    name = data.get("name")
+    username = data.get("username")
+    email = data.get("email")
+    password = data.get("password")
+
+    if not all([name, username, email, password]):
+        return jsonify({"error": "Missing fields: name, username, email, and password are required"}), 400
+
     try:
-        user_id = request.json.get("user_id")
-        if not user_id:
-            return {"error": "user_id required"}, 400
+        domain_suffix = email.split('@')[1].lower()
+    except IndexError:
+        return jsonify({"error": "Invalid email format"}), 400
 
-        payload = {
-            "userId": user_id,
-            "exp": datetime.utcnow() + timedelta(hours=2)
-        }
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
-        token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-        return {"access_token": token}
+    try:
+        with engine.begin() as conn: 
+            
+            uni_row = conn.execute(
+                text("SELECT id FROM universities WHERE domain_suffix = :domain"),
+                {"domain": domain_suffix}
+            ).fetchone()
+
+            if not uni_row:
+                return jsonify({"error": f"Email domain '{domain_suffix}' is not registered to a university"}), 400
+            
+            university_id = uni_row._mapping["id"]
+
+            exists = conn.execute(
+                text("SELECT 1 FROM users WHERE email = :email OR username = :username"),
+                {"email": email, "username": username}
+            ).fetchone()
+            
+            if exists:
+                return jsonify({"error": "Email or username already in use"}), 409
+
+            conn.execute(
+                text("""
+                    INSERT INTO users (name, username, email, password_hash, university_id, role)
+                    VALUES (:name, :username, :email, :hash, :uni_id, 'USER')
+                """),
+                {
+                    "name": name,
+                    "username": username,
+                    "email": email,
+                    "hash": hashed_password.decode('utf-8'), 
+                    "uni_id": university_id
+                }
+            )
+        
+        return jsonify({"message": "User registered successfully"}), 201
 
     except Exception as e:
-        return {"error": str(e)}, 500
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+
+@app.post("/login")
+def login():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    try:
+        with engine.connect() as conn:
+            user_row = conn.execute(
+                text("SELECT id, password_hash FROM users WHERE email = :email"),
+                {"email": email}
+            ).fetchone()
+
+            if not user_row:
+                return jsonify({"error": "Invalid email or password"}), 401
+
+            user_id = user_row._mapping["id"]
+            stored_hash = user_row._mapping["password_hash"].encode('utf-8') 
+            
+            if not bcrypt.checkpw(password.encode('utf-8'), stored_hash):
+                return jsonify({"error": "Invalid email or password"}), 401
+
+            payload = {
+                "userId": user_id,
+                "exp": datetime.utcnow() + timedelta(hours=2)
+            }
+            token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+            
+            return jsonify({"access_token": token})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.get("/health")
 def health():
@@ -40,7 +124,6 @@ def health():
             conn.execute(text("SELECT 1"))
         return {"ok": True}
     except Exception as e:
-
         return {"ok": False, "error": str(e)}, 503
     
 
@@ -102,7 +185,7 @@ def users_me():
             if not data:
                 return {"error": "No data provided"}, 400
 
-            allowed_fields = {"username"}  # ileride genişletilir
+            allowed_fields = {"username"}
             update_data = {k: v for k, v in data.items() if k in allowed_fields}
 
             if not update_data:
@@ -166,6 +249,10 @@ def event_types():
         return {"error": str(e)}, 503
 
 
+def mysql_dt_to_iso_z(dt):
+    """Convert MySQL datetime to ISO format with Z suffix"""
+    return dt.isoformat() + "Z" if dt else None
+
 @app.get("/events")
 def get_events():
     try:
@@ -183,7 +270,14 @@ def get_events():
                 ORDER BY e.starts_at ASC
             """)
             result = conn.execute(query)
-            rows = [dict(r._mapping) for r in result]
+            rows = []
+            for r in result:
+                m = dict(r._mapping)
+                m["starts_at"]  = mysql_dt_to_iso_z(m.get("starts_at"))
+                m["ends_at"]    = mysql_dt_to_iso_z(m.get("ends_at"))
+                m["created_at"] = mysql_dt_to_iso_z(m.get("created_at"))
+                m["updated_at"] = mysql_dt_to_iso_z(m.get("updated_at"))
+                rows.append(m)
         return jsonify(rows)
     except Exception as e:
         return {"error": str(e)}, 503
@@ -215,6 +309,11 @@ def get_event_by_id(event_id):
             """), {"id": event_id}).fetchall()
 
         event_data = dict(event._mapping)
+        event_data["starts_at"]  = mysql_dt_to_iso_z(event_data.get("starts_at"))
+        event_data["ends_at"]    = mysql_dt_to_iso_z(event_data.get("ends_at"))
+        event_data["created_at"] = mysql_dt_to_iso_z(event_data.get("created_at"))
+        event_data["updated_at"] = mysql_dt_to_iso_z(event_data.get("updated_at"))
+        
         event_data["participants"] = [dict(p._mapping) for p in participants]
         return jsonify(event_data)
     except Exception as e:
@@ -262,7 +361,12 @@ def filter_events():
                 ORDER BY e.starts_at ASC
             """)
             result = conn.execute(query, params)
-            rows = [dict(r._mapping) for r in result]
+            rows = []
+            for r in result:
+                m = dict(r._mapping)
+                m["starts_at"]  = mysql_dt_to_iso_z(m.get("starts_at"))
+                m["created_at"] = mysql_dt_to_iso_z(m.get("created_at"))
+                rows.append(m)
         return jsonify(rows)
     except Exception as e:
         return {"error": str(e)}, 503
@@ -284,7 +388,13 @@ def get_user_events(user_id):
                 ORDER BY e.starts_at DESC
             """)
             result = conn.execute(query, {"uid": user_id})
-            rows = [dict(r._mapping) for r in result]
+            rows = []
+            for r in result:
+                m = dict(r._mapping)
+                m["starts_at"]  = mysql_dt_to_iso_z(m.get("starts_at"))
+                m["ends_at"]    = mysql_dt_to_iso_z(m.get("ends_at"))
+                m["created_at"] = mysql_dt_to_iso_z(m.get("created_at"))
+                rows.append(m)
         return jsonify(rows)
     except Exception as e:
         return {"error": str(e)}, 503
@@ -325,3 +435,4 @@ def ratings():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
