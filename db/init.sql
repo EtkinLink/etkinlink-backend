@@ -20,7 +20,7 @@ CREATE TABLE users (
   name            VARCHAR(120) NOT NULL,
   username        VARCHAR(60)  NOT NULL,
   email           VARCHAR(256) NOT NULL,
-  password_hash   VARBINARY(256) NOT NULL,   
+  password_hash   CHAR(255) NOT NULL,   
   photo_url       VARCHAR(500),              
   latitude        DECIMAL(9,6),              
   longitude       DECIMAL(9,6),

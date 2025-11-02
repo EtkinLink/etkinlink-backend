@@ -234,27 +234,23 @@ def login():
                 text("SELECT id, password_hash FROM users WHERE email = :email"),
                 {"email": email}
             ).fetchone()
-
             if not user_row:
                 return {"error": "No registered account found."}, 401
-
             user = dict(user_row._mapping)
             stored_password_hash = user["password_hash"]
-
-            if not check_password_hash(stored_password_hash, password, method='pbkdf2:sha256'):
+            if not check_password_hash(stored_password_hash, password):
                 return {"error": "Incorrect password."}, 401
             payload = {
                 "userId": user["id"],
-                "exp": datetime.now(datetime.timezone.utc) + timedelta(hours=2)
+                "exp": datetime.utcnow() + timedelta(hours=2)
             }
-
             token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-            response = {"access_token": token}
+            response = {"access_token": token, "debug_info": s}
 
             return response
-    except:
-        return {"error": "Login failed"}, 503
-    
+    except Exception as e:
+        return {"error": f"Login failed: {str(e)}"}, 503
+
 
 def auth_required(f):
     @wraps(f)
