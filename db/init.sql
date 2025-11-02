@@ -5,17 +5,27 @@ CREATE TABLE universities (
   UNIQUE KEY uq_university_name (name)
 ) ENGINE=InnoDB;
 
+CREATE TABLE university_domains (
+  id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  university_id BIGINT UNSIGNED NOT NULL, 
+  domain        VARCHAR(100) NOT NULL, 
+  
+  UNIQUE KEY uq_domain (domain), 
+
+  FOREIGN KEY (university_id) REFERENCES universities (id) ON DELETE CASCADE 
+) ENGINE=InnoDB;
 
 CREATE TABLE users (
   id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   name            VARCHAR(120) NOT NULL,
   username        VARCHAR(60)  NOT NULL,
   email           VARCHAR(256) NOT NULL,
-  password_hash   VARBINARY(100) NOT NULL,   
+  password_hash   VARBINARY(256) NOT NULL,   
   photo_url       VARCHAR(500),              
   latitude        DECIMAL(9,6),              
   longitude       DECIMAL(9,6),
   role            ENUM('USER','ADMIN') NOT NULL DEFAULT 'USER',
+  status          INTEGER NOT NULL DEFAULT 0,
   university_id   BIGINT UNSIGNED,
 
 
@@ -145,6 +155,18 @@ INSERT INTO universities (name) VALUES
   ('Ankara University'),
   ('Ege University'),
   ('Hacettepe University');
+
+INSERT INTO university_domains (university_id, domain) VALUES
+  (1, 'itu.edu.tr'),
+  (2, 'boun.edu.tr'),
+  (3, 'metu.edu.tr'),
+  (4, 'ku.edu.tr'),
+  (5, 'sabanciuniv.edu'),
+  (6, 'yildiz.edu.tr'),
+  (7, 'bilkent.edu.tr'),
+  (8, 'ankara.edu.tr'),
+  (9, 'ege.edu.tr'),
+  (10, 'hacettepe.edu.tr');
 
 INSERT INTO users (name, username, email, password_hash, photo_url, latitude, longitude, role, university_id)
 VALUES

@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import jwt
 from sqlalchemy import create_engine, text
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 CORS(app)
@@ -158,8 +158,66 @@ def universities():
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
-    ...
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+    username = data.get("username")
+    name = data.get("name")
+    if not email or not password or not username or not name:
+        return {"error": "Missing fields."}, 400
 
+    try:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT id FROM users WHERE email = :email OR username = :username"),
+                {"email": email, "username": username}
+            ).fetchone()
+
+            if exists:
+                return {"error": "Email or username already in use."}, 409
+
+            password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+            
+            try:
+                domain = email.split('@')[1].lower()
+            except IndexError:
+                return {"error": "Invalid email format."}, 400
+            
+            sql_query = text("""
+                SELECT 
+                    ud.university_id 
+                FROM 
+                    university_domains ud
+                WHERE 
+                    ud.domain = :domain_name
+            """)
+
+            result = conn.execute(sql_query, {"domain_name": domain}).fetchone()
+
+            if result:
+                university_id = result[0]
+            else:
+                return {"error": "University not found."}, 404
+
+            conn.execute(
+                text("""
+                    INSERT INTO users (name, username, email, password_hash, role, university_id)
+                    VALUES (:name, :username, :email, :password_hash, :role, :university_id)
+                """),
+                {
+                    "name": name,
+                    "username": username,
+                    "email": email,
+                    "password_hash": password_hash,
+                    "role": "USER",
+                    "university_id": university_id
+                }
+            )
+            conn.commit()
+
+        return {"message": "Registration successful."}, 201
+    except Exception as e:
+        return {"error": str(e)}, 503
 
 @app.post("/auth/login")
 def login():
@@ -183,7 +241,7 @@ def login():
             user = dict(user_row._mapping)
             stored_password_hash = user["password_hash"]
 
-            if not check_password_hash(stored_password_hash, password):
+            if not check_password_hash(stored_password_hash, password, method='pbkdf2:sha256'):
                 return {"error": "Incorrect password."}, 401
             payload = {
                 "userId": user["id"],
@@ -191,21 +249,11 @@ def login():
             }
 
             token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-            # response = jsonify({"message": "Login successful"})
-            # response.set_cookie(
-            #     'access_token', 
-            #     token,
-            #     # CSRF korumasi icin
-            #     httponly=True,
-            #     secure=True,
-            #     samesite='Strict',
-            #     max_age=7200  # 2 saat
-            # )
             response = {"access_token": token}
-            
+
             return response
-    except Exception as e:
-        return {"error": str(e)}, 503
+    except:
+        return {"error": "Login failed"}, 503
     
 
 def auth_required(f):
