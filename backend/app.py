@@ -396,6 +396,7 @@ def filter_events():
         to_date = request.args.get("to")
         search = request.args.get("q")
         university = request.args.get("university")  # can be name or id
+        organization = request.args.get("organization")
 
         filters = []
         params = {}
@@ -414,7 +415,7 @@ def filter_events():
             params["to_date"] = to_date
 
         if search:
-            filters.append("(e.title LIKE :search OR o.name LIKE :search)")
+            filters.append("(e.title LIKE :search OR o.name LIKE :search OR u.username LIKE :search)")
             params["search"] = f"%{search}%"
 
         # --- NEW: University filter ---
@@ -426,6 +427,15 @@ def filter_events():
             else:
                 filters.append("un.name LIKE :university_name")
                 params["university_name"] = f"%{university}%"
+
+        if organization:
+            # ID or name filter for organizations
+            if organization.isdigit():
+                filters.append("o.id = :organization_id")
+                params["organization_id"] = int(organization)
+            else:
+                filters.append("o.name LIKE :organization_name")
+                params["organization_name"] = f"%{organization}%"
 
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
 
