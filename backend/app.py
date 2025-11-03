@@ -1,11 +1,14 @@
-import os
-import jwt
-from flask import request,Flask, jsonify
-from flask_cors import CORS
-from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
+from functools import wraps
+import os
 import re
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import jwt
+from sqlalchemy import create_engine, text
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 CORS(app)
@@ -153,7 +156,122 @@ def universities():
         return {"error": str(e)}, 503
 
 
+# Auth fonksiyonlari
+@app.post("/auth/register")
+def register():
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+    username = data.get("username")
+    name = data.get("name")
+    if not email or not password or not username or not name:
+        return {"error": "Missing fields."}, 400
 
+    try:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT id FROM users WHERE email = :email OR username = :username"),
+                {"email": email, "username": username}
+            ).fetchone()
+
+            if exists:
+                return {"error": "Email or username already in use."}, 409
+
+            password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+            
+            try:
+                domain = email.split('@')[1].lower()
+            except IndexError:
+                return {"error": "Invalid email format."}, 400
+            
+            sql_query = text("""
+                SELECT 
+                    ud.university_id 
+                FROM 
+                    university_domains ud
+                WHERE 
+                    ud.domain = :domain_name
+            """)
+
+            result = conn.execute(sql_query, {"domain_name": domain}).fetchone()
+
+            if result:
+                university_id = result[0]
+            else:
+                return {"error": "University not found."}, 404
+
+            conn.execute(
+                text("""
+                    INSERT INTO users (name, username, email, password_hash, role, university_id)
+                    VALUES (:name, :username, :email, :password_hash, :role, :university_id)
+                """),
+                {
+                    "name": name,
+                    "username": username,
+                    "email": email,
+                    "password_hash": password_hash,
+                    "role": "USER",
+                    "university_id": university_id
+                }
+            )
+            conn.commit()
+
+        return {"message": "Registration successful."}, 201
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+@app.post("/auth/login")
+def login():
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return {"error": "Email and password are required."}, 400
+
+    try:
+        with engine.connect() as conn:
+            user_row = conn.execute(
+                text("SELECT id, password_hash FROM users WHERE email = :email"),
+                {"email": email}
+            ).fetchone()
+            if not user_row:
+                return {"error": "No registered account found."}, 401
+            user = dict(user_row._mapping)
+            stored_password_hash = user["password_hash"]
+            if not check_password_hash(stored_password_hash, password):
+                return {"error": "Incorrect password."}, 401
+            payload = {
+                "userId": user["id"],
+                "exp": datetime.utcnow() + timedelta(hours=2)
+            }
+            token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+            response = {"access_token": token}
+
+            return response
+    except Exception as e:
+        return {"error": f"Login failed: {str(e)}"}, 503
+
+
+def auth_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return {"error": "Authorization header missing or invalid"}, 401
+        token = auth_header.split(" ", 1)[1]
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get("userId")
+            if not user_id:
+                return {"error": "Invalid token: userId missing"}, 401
+            request.user_id = user_id
+            return f(*args, **kwargs)
+        except jwt.ExpiredSignatureError:
+            return {"error": "Token expired"}, 401
+        except jwt.InvalidTokenError:
+            return {"error": "Invalid token"}, 401
+    return decorated
 
 
 @app.get("/event_types")
