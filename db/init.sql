@@ -573,16 +573,16 @@ INSERT INTO university_domains (university_id, domain) VALUES
 
 INSERT INTO users (name, username, email, password_hash, photo_url, latitude, longitude, role, university_id)
 VALUES
-  ('Onat Budak', 'onat', 'onat@example.com', 'hash1', NULL, 41.1050, 29.0250, 'USER', 1),
-  ('Ada Lovelace', 'ada', 'ada@example.com', 'hash2', NULL, 41.0853, 29.0434, 'ADMIN', 1),
-  ('Grace Hopper', 'grace', 'grace@example.com', 'hash3', NULL, 39.9334, 32.8597, 'USER', 3),
-  ('Alan Turing', 'alant', 'turing@example.com', 'hash4', NULL, 51.5074, -0.1278, 'USER', 2),
-  ('Linus Torvalds', 'linus', 'linus@example.com', 'hash5', NULL, 60.1699, 24.9384, 'USER', 5),
-  ('Elon Musk', 'elon', 'elon@example.com', 'hash6', NULL, 34.0522, -118.2437, 'USER', 4),
-  ('Mark Zuckerberg', 'markz', 'mark@example.com', 'hash7', NULL, 37.4848, -122.1484, 'USER', 6),
-  ('Bill Gates', 'billg', 'bill@example.com', 'hash8', NULL, 47.6062, -122.3321, 'USER', 7),
-  ('Steve Jobs', 'jobs', 'jobs@example.com', 'hash9', NULL, 37.3348, -122.0090, 'USER', 4),
-  ('Dennis Ritchie', 'dennis', 'dennis@example.com', 'hash10', NULL, 40.7128, -74.0060, 'USER', 2);
+  ('Onat Budak', 'onat', 'onat@itu.edu.tr', 'hash1', NULL, 41.1050, 29.0250, 'USER', 1),
+  ('Ada Lovelace', 'ada', 'ada@itu.edu.tr', 'hash2', NULL, 41.0853, 29.0434, 'ADMIN', 1),
+  ('Grace Hopper', 'grace', 'grace@itu.edu.tr', 'hash3', NULL, 39.9334, 32.8597, 'USER', 3),
+  ('Alan Turing', 'alant', 'turing@itu.edu.tr', 'hash4', NULL, 51.5074, -0.1278, 'USER', 2),
+  ('Linus Torvalds', 'linus', 'linus@itu.edu.tr', 'hash5', NULL, 60.1699, 24.9384, 'USER', 5),
+  ('Elon Musk', 'elon', 'elon@itu.edu.tr', 'hash6', NULL, 34.0522, -118.2437, 'USER', 4),
+  ('Mark Zuckerberg', 'markz', 'mark@itu.edu.tr', 'hash7', NULL, 37.4848, -122.1484, 'USER', 6),
+  ('Bill Gates', 'billg', 'bill@itu.edu.tr', 'hash8', NULL, 47.6062, -122.3321, 'USER', 7),
+  ('Steve Jobs', 'jobs', 'jobs@itu.edu.tr', 'hash9', NULL, 37.3348, -122.0090, 'USER', 4),
+  ('Dennis Ritchie', 'dennis', 'dennis@itu.edu.tr', 'hash10', NULL, 40.7128, -74.0060, 'USER', 2);
 
 
 INSERT INTO event_types (code) VALUES
