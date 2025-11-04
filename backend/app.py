@@ -328,11 +328,10 @@ def get_events():
     except Exception as e:
         return {"error": str(e)}, 503
 
-
 @app.get("/events/<int:event_id>")
 def get_event_by_id(event_id):
     """
-    Returns detailed info about a specific event, including participants.
+    Returns detailed info about a specific event, including participants and applications.
     """
     try:
         with engine.connect() as conn:
@@ -352,6 +351,7 @@ def get_event_by_id(event_id):
                     e.created_at,
                     e.updated_at,
                     e.owner_type,
+                    e.owner_organization_id,
                     u.username AS owner_username,
                     o.name AS owner_organization_name,
                     et.code AS event_type
@@ -375,14 +375,31 @@ def get_event_by_id(event_id):
                 WHERE p.event_id = :id
             """), {"id": event_id}).fetchall()
 
+            # Include applications if event belongs to an organization
+            applications = []
+            if event.owner_type == "ORGANIZATION" and event.owner_organization_id:
+                applications = conn.execute(text("""
+                    SELECT 
+                        a.id,
+                        a.user_id,
+                        u.username,
+                        a.motivation,
+                        a.status,
+                        a.created_at
+                    FROM organization_applications a
+                    JOIN users u ON a.user_id = u.id
+                    WHERE a.organization_id = :org_id
+                    ORDER BY a.created_at DESC
+                """), {"org_id": event.owner_organization_id}).fetchall()
+
         event_data = dict(event._mapping)
         event_data["participants"] = [dict(p._mapping) for p in participants]
+        event_data["applications"] = [dict(a._mapping) for a in applications]
 
         return jsonify(event_data)
 
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @app.get("/events/filter")
 def filter_events():
@@ -460,15 +477,15 @@ def filter_events():
     except Exception as e:
         return {"error": str(e)}, 503
 
-
 @app.get("/users/<int:user_id>/events")
 def get_user_events(user_id):
     """
-    Returns events that the user has participated in or owns.
+    Returns events that the user has participated in or owns, plus events of organizations they applied to.
     """
     try:
         with engine.connect() as conn:
-            query = text("""
+            # Get participant events
+            participant_events = conn.execute(text("""
                 SELECT 
                     e.id,
                     e.title,
@@ -489,14 +506,45 @@ def get_user_events(user_id):
                 LEFT JOIN users u ON e.owner_user_id = u.id
                 WHERE p.user_id = :uid
                 ORDER BY e.starts_at DESC
-            """)
-            result = conn.execute(query, {"uid": user_id})
-            rows = [dict(r._mapping) for r in result]
+            """), {"uid": user_id}).fetchall()
 
-        return jsonify(rows)
+            # Get events of organizations the user has applied to
+            applied_org_events = conn.execute(text("""
+                SELECT 
+                    e.id,
+                    e.title,
+                    e.starts_at,
+                    e.ends_at,
+                    e.location_name,
+                    e.status,
+                    e.created_at,
+                    e.owner_type,
+                    et.code AS event_type,
+                    'APPLIED' AS participation_status,
+                    o.name AS owner_organization_name,
+                    u.username AS owner_username
+                FROM organization_applications a
+                JOIN events e ON e.owner_organization_id = a.organization_id
+                LEFT JOIN event_types et ON e.type_id = et.id
+                LEFT JOIN organizations o ON e.owner_organization_id = o.id
+                LEFT JOIN users u ON e.owner_user_id = u.id
+                WHERE a.user_id = :uid
+                AND e.id NOT IN (
+                    SELECT p.event_id FROM participants p WHERE p.user_id = :uid
+                )
+                ORDER BY e.starts_at DESC
+            """), {"uid": user_id}).fetchall()
+
+            # Merge the results
+            all_events = [dict(r._mapping) for r in participant_events]
+            all_events.extend([dict(r._mapping) for r in applied_org_events])
+
+            # Sort by starts_at descending
+            all_events.sort(key=lambda x: x['starts_at'], reverse=True)
+
+        return jsonify(all_events)
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @app.post("/events")
 def create_event():
@@ -807,6 +855,37 @@ def approve_organization_application(org_id, app_id):
             conn.commit()
 
         return {"message": "Application approved and member added"}
+
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+@app.post("/organizations/<int:org_id>/applications/<int:app_id>/reject")
+def reject_organization_application(org_id, app_id):
+    """Reject a pending organization application (admin or representative only)."""
+    try:
+        user_id = verify_jwt()
+
+        with engine.connect() as conn:
+            # Check role
+            check_organization_permission(conn, org_id, user_id, ["ADMIN", "REPRESENTATIVE"])
+
+            app_row = conn.execute(text("""
+                SELECT user_id FROM organization_applications
+                WHERE id = :app_id AND organization_id = :oid AND status = 'PENDING'
+            """), {"app_id": app_id, "oid": org_id}).fetchone()
+
+            if not app_row:
+                return {"error": "Application not found or already processed"}, 404
+
+            # Reject the application
+            conn.execute(text("""
+                UPDATE organization_applications SET status = 'REJECTED' WHERE id = :app_id
+            """), {"app_id": app_id})
+            conn.commit()
+
+        return {"message": "Application rejected successfully"}
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code
