@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 import os
 import re
+import uuid
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
 
 from flask import Flask, jsonify, request
@@ -284,6 +285,101 @@ def event_types():
     except Exception as e:
         return {"error": str(e)}, 503
 
+@app.get("/users/me/events")
+def get_my_events_and_tickets():
+    try:
+        user_id = verify_jwt() 
+
+        with engine.connect() as conn:
+            query = text("""
+                SELECT 
+                    e.id AS event_id,
+                    e.title AS event_title,
+                    e.starts_at,
+                    e.location_name,
+                    p.ticket_code,
+                    p.status AS participation_status
+                FROM participants p
+                JOIN events e ON e.id = p.event_id
+                WHERE p.user_id = :uid
+                ORDER BY e.starts_at DESC
+            """)
+            
+            result = conn.execute(query, {"uid": user_id})
+            my_events = [dict(r._mapping) for r in result]
+
+        return jsonify(my_events)
+
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": str(e)}, 503
+    
+@app.post("/events/<int:event_id>/check-in")
+def check_in_participant(event_id):
+    """
+    Performs check-in for a participant by scanning their ticket_code.
+    Only event owners or organization admins/representatives can perform this.
+    """
+    try:
+        admin_user_id = verify_jwt()
+        
+        data = request.get_json()
+        if not data or "ticket_code" not in data:
+            return {"error": "ticket_code is required"}, 400
+        
+        ticket_code = data.get("ticket_code")
+
+        with engine.connect() as conn:
+            
+            try:
+                check_event_ownership(conn, event_id, admin_user_id)
+            except AuthError as auth_err:
+                return {"error": auth_err.args[0]}, auth_err.code
+
+            with conn.begin() as trans:
+            
+                query = text("""
+                    SELECT 
+                        p.status,
+                        u.username,
+                        u.name
+                    FROM participants p
+                    JOIN users u ON p.user_id = u.id
+                    WHERE p.ticket_code = :ticket_code AND p.event_id = :event_id
+                    FOR UPDATE
+                """)
+                
+                participant = conn.execute(query, {
+                    "ticket_code": ticket_code, 
+                    "event_id": event_id
+                }).fetchone()
+
+                if not participant:
+                    return {"error": "Invalid ticket or not for this event"}, 404
+                
+                if participant.status == 'ATTENDED':
+                    return {"error": f"Ticket already used by {participant.username}"}, 409
+                
+                update_query = text("""
+                    UPDATE participants 
+                    SET status = 'ATTENDED' 
+                    WHERE ticket_code = :ticket_code
+                """)
+                
+                conn.execute(update_query, {"ticket_code": ticket_code})
+
+
+        return {
+            "message": "Check-in successful", 
+            "username": participant.username,
+            "name": participant.name
+        }, 200
+
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": f"An error occurred: {str(e)}"}, 503
 
 @app.get("/events")
 def get_events():

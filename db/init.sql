@@ -127,6 +127,7 @@ CREATE TABLE participants (
   user_id         BIGINT UNSIGNED NOT NULL,
   application_id  BIGINT UNSIGNED, 
   status          ENUM('ATTENDED','NO_SHOW') NOT NULL DEFAULT 'NO_SHOW',
+  ticket_code     VARCHAR(36) NOT NULL UNIQUE,
 
   CONSTRAINT fk_participants_event
     FOREIGN KEY (event_id) REFERENCES events(id)
@@ -712,18 +713,18 @@ VALUES
  (6, 10, 'Startup founder', 'APPROVED'),
  (7, 3, 'Hackathon lover', 'PENDING');
 
-INSERT INTO participants (event_id, user_id, application_id, status)
+INSERT INTO participants (event_id, user_id, application_id, status, ticket_code)
 VALUES
- (1, 2, 1, 'ATTENDED'),
- (2, 4, 3, 'ATTENDED'),
- (3, 6, 5, 'NO_SHOW'),
- (4, 8, 7, 'ATTENDED'),
- (5, 9, 8, 'ATTENDED'),
- (6, 10, 9, 'ATTENDED'),
- (7, 3, 10, 'NO_SHOW'),
- (1, 3, 2, 'NO_SHOW'),
- (2, 5, 4, 'ATTENDED'),
- (3, 7, 6, 'ATTENDED');
+ (1, 2, 1, 'ATTENDED', '10000000-0000-0000-0000-000000000001'),
+ (2, 4, 3, 'ATTENDED', '10000000-0000-0000-0000-000000000002'),
+ (3, 6, 5, 'NO_SHOW',  '10000000-0000-0000-0000-000000000003'),
+ (4, 8, 7, 'ATTENDED', '10000000-0000-0000-0000-000000000004'),
+ (5, 9, 8, 'ATTENDED', '10000000-0000-0000-0000-000000000005'),
+ (6, 10, 9, 'ATTENDED', '10000000-0000-0000-0000-000000000006'),
+ (7, 3, 10, 'NO_SHOW',  '10000000-0000-0000-0000-000000000007'),
+ (1, 3, 2, 'NO_SHOW',  '10000000-0000-0000-0000-000000000008'),
+ (2, 5, 4, 'ATTENDED', '10000000-0000-0000-0000-000000000009'),
+ (3, 7, 6, 'ATTENDED', '10000000-0000-0000-0000-000000000010');
 
 
 INSERT INTO ratings (event_id, user_id, rating, comment)
