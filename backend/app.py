@@ -163,7 +163,6 @@ def universities():
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
-    #email normalization
     def normalize_email(email_str):
         """
             Normalizes an email address for DB storage and querying.
@@ -192,9 +191,14 @@ def register():
         except (ValueError, AttributeError):
             return email_str
     data = request.get_json()
-    email = normalize_email(data.get("email"))
-    password = data.get("password")
-    name = data.get("name")
+    email = normalize_email(data.get("email", "").strip())
+    password = data.get("password", "").strip()
+    name = data.get("name", "").strip()
+    
+    # Get device and location info from request headers
+    device_info = request.headers.get('User-Agent')
+    # You might want to use a geolocation service here
+    location_info = request.headers.get('X-Location')
 
     if not email or not password or not name:
         return {"error": "All fields are required"}, 400
@@ -236,17 +240,24 @@ def register():
                 "email": email,
                 "password": generate_password_hash(password),
                 "name": name,
-                "username": email.split('@')[0],  # Email'in @ öncesini username olarak kullan
+                "username": email.split('@')[0],
+                "university_id": university_id,
                 "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             }
 
             # Verification token oluştur
             token = generate_verification_token(payload)
             
-            # Verification emaili gönder
-            send_verification_email(email, token)
-
-            return {"message": "Verification email sent"}, 200
+            try:
+                send_verification_email(
+                    email, 
+                    token,
+                    device_info=device_info,
+                    location_info=location_info
+                )
+                return {"message": "Verification email sent"}, 200
+            except Exception as e:
+                return {"error": f"Failed to send verification email: {str(e)}"}, 500
 
     except Exception as e:
         return {"error": f"Registration failed: {str(e)}"}, 503
@@ -272,14 +283,15 @@ def verify_email(token):
             # Kullanıcıyı kaydet
             result = conn.execute(
                 text("""
-                    INSERT INTO users (email, password_hash, name, username) 
-                    VALUES (:email, :password, :name, :username)
+                    INSERT INTO users (email, password_hash, name, username, university_id) 
+                    VALUES (:email, :password, :name, :username, :university_id)
                 """),
                 {
                     "email": payload["email"],
                     "password": payload["password"],
                     "name": payload["name"],
-                    "username": payload["email"].split('@')[0]  # Email'in @ öncesini username olarak kullan
+                    "username": payload["username"],
+                    "university_id": payload["university_id"]
                 }
             )
             conn.commit()
@@ -293,8 +305,8 @@ def verify_email(token):
 @app.post("/auth/login")
 def login():
     data = request.get_json()
-    email = data.get("email")
-    password = data.get("password")
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
 
     if not email or not password:
         return {"error": "Email and password are required."}, 400
@@ -854,7 +866,11 @@ def create_organization():
         user_id = verify_jwt()
 
         data = request.get_json()
-        if not data or "name" not in data:
+        name = data.get("name", "").strip()
+        description = data.get("description", "").strip()
+        photo_url = data.get("photo_url", "").strip()
+
+        if not name:
             return {"error": "Organization name is required"}, 400
 
         with engine.connect() as conn:
