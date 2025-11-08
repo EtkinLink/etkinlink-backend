@@ -106,7 +106,7 @@ CREATE TABLE applications (
   event_id      BIGINT UNSIGNED NOT NULL,
   user_id       BIGINT UNSIGNED NOT NULL,
   why_me        TEXT,
-  status        ENUM('PENDING','APPROVED') NOT NULL DEFAULT 'PENDING',
+  status        ENUM('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
 
   CONSTRAINT fk_apps_event
     FOREIGN KEY (event_id) REFERENCES events(id)
