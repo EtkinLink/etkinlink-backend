@@ -169,8 +169,36 @@ def universities():
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
+    #email normalization
+    def normalize_email(email_str):
+        """
+            Normalizes an email address for DB storage and querying.
+            1. Ignores the part after '+'.
+            2. Removes all '.' (dot) characters from the local part.
+            3. Converts the entire address to lowercase.
+            
+            Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
+        """
+        if not email_str:
+            return email_str
+            
+        try:
+            email_str = email_str.strip()
+            local_part, domain_part = email_str.split('@', 1)
+            
+            local_part = local_part.split('+', 1)[0]
+            
+            local_part = local_part.replace('.', '')
+            local_part = local_part.lower()
+            
+            domain_part = domain_part.lower()
+            
+            return f"{local_part}@{domain_part}"
+        
+        except (ValueError, AttributeError):
+            return email_str
     data = request.get_json()
-    email = data.get("email")
+    email = normalize_email(data.get("email"))
     password = data.get("password")
     name = data.get("name")
 
@@ -187,6 +215,27 @@ def register():
             
             if existing_user:
                 return {"error": "Email already registered"}, 400
+            
+            try:
+                domain = email.split('@')[1]
+            except IndexError:
+                return {"error": "Invalid email format."}, 400
+            
+            sql_query = text("""
+                SELECT 
+                    ud.university_id 
+                FROM 
+                    university_domains ud
+                WHERE 
+                    ud.domain = :domain_name
+            """)
+
+            result = conn.execute(sql_query, {"domain_name": domain}).fetchone()
+
+            if result:
+                university_id = result[0]
+            else:
+                return {"error": "University not found."}, 404
 
             # Token payload'ı hazırla
             payload = {
