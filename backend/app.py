@@ -4,6 +4,8 @@ import os
 import re
 import uuid
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
+from utils.email import generate_verification_token, verify_token, send_verification_email
+from flask_mail import Mail
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -14,10 +16,21 @@ from werkzeug.security import check_password_hash, generate_password_hash
 app = Flask(__name__)
 CORS(app)
 
+# Mail konfigürasyonları
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER')
+
+# Mail nesnesini oluştur
+mail = Mail(app)
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
-
 
 #email normalization
 def normalize_email(email_str):
@@ -76,7 +89,6 @@ def health():
 
         return {"ok": False, "error": str(e)}, 503
     
-
 
 @app.route("/users/me", methods=["GET", "PUT"])
 def users_me():
@@ -173,7 +185,6 @@ def users_me():
         return {"error": str(e)}, 503
 
 
-
 @app.get("/universities")
 def universities():
     try:
@@ -184,73 +195,85 @@ def universities():
     except Exception as e:
         return {"error": str(e)}, 503
 
-
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
     data = request.get_json()
     email = data.get("email")
     password = data.get("password")
-    username = data.get("username")
     name = data.get("name")
-    
-    normalized_email = normalize_email(email)
 
-    if not normalized_email or not password or not username or not name:
-        return {"error": "Missing fields."}, 400
+    if not email or not password or not name:
+        return {"error": "All fields are required"}, 400
 
     try:
         with engine.connect() as conn:
-            exists = conn.execute(
-                text("SELECT id FROM users WHERE email = :email OR username = :username"),
-                {"email": normalized_email, "username": username}
+            # Email kullanımda mı kontrol et
+            existing_user = conn.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": email}
             ).fetchone()
-
-            if exists:
-                return {"error": "Email or username already in use."}, 409
-
-            password_hash = generate_password_hash(password, method='pbkdf2:sha256')
             
-            try:
-                domain = normalized_email.split('@')[1]
-            except IndexError:
-                return {"error": "Invalid email format."}, 400
+            if existing_user:
+                return {"error": "Email already registered"}, 400
+
+            # Token payload'ı hazırla
+            payload = {
+                "email": email,
+                "password": generate_password_hash(password),
+                "name": name,
+                # datetime nesnesini ISO format string'e çevir
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+            # Verification token oluştur
+            token = generate_verification_token(payload)
             
-            sql_query = text("""
-                SELECT 
-                    ud.university_id 
-                FROM 
-                    university_domains ud
-                WHERE 
-                    ud.domain = :domain_name
-            """)
+            # Verification emaili gönder
+            send_verification_email(email, token)
 
-            result = conn.execute(sql_query, {"domain_name": domain}).fetchone()
+            return {"message": "Verification email sent"}, 200
 
-            if result:
-                university_id = result[0]
-            else:
-                return {"error": "University not found."}, 404
+    except Exception as e:
+        return {"error": f"Registration failed: {str(e)}"}, 503
 
-            conn.execute(
+
+@app.get("/auth/register/verify/<token>")
+def verify_email(token):
+    payload = verify_token(token)
+    if not payload:
+        return {"error": "Invalid or expired verification link"}, 400
+
+    try:
+        with engine.connect() as conn:
+            # Email kullanımda mı tekrar kontrol et
+            existing_user = conn.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": payload["email"]}
+            ).fetchone()
+            
+            if existing_user:
+                return {"error": "Email already registered"}, 400
+
+            # Kullanıcıyı kaydet
+            result = conn.execute(
                 text("""
-                    INSERT INTO users (name, username, email, password_hash, role, university_id)
-                    VALUES (:name, :username, :email, :password_hash, :role, :university_id)
+                    INSERT INTO users (email, password_hash, name) 
+                    VALUES (:email, :password, :name)
                 """),
                 {
-                    "name": name,
-                    "username": username,
-                    "email": normalized_email,
-                    "password_hash": password_hash,
-                    "role": "USER",
-                    "university_id": university_id
+                    "email": payload["email"],
+                    "password": payload["password"],
+                    "name": payload["name"]
                 }
             )
             conn.commit()
 
-        return {"message": "Registration successful."}, 201
+            return {"message": "Account verified successfully"}, 200
+
     except Exception as e:
-        return {"error": str(e)}, 503
+        return {"error": f"Verification failed: {str(e)}"}, 503
+
 
 @app.post("/auth/login")
 def login():
@@ -457,6 +480,7 @@ def get_events():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.get("/events/<int:event_id>")
 def get_event_by_id(event_id):
     """
@@ -529,6 +553,7 @@ def get_event_by_id(event_id):
 
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.get("/events/filter")
 def filter_events():
@@ -616,6 +641,7 @@ def filter_events():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.get("/users/<int:user_id>/events")
 def get_user_events(user_id):
     """
@@ -685,6 +711,7 @@ def get_user_events(user_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/events")
 def create_event():
     """
@@ -749,6 +776,7 @@ def create_event():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.put("/events/<int:event_id>")
 def update_event(event_id):
     """
@@ -792,6 +820,7 @@ def update_event(event_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.delete("/events/<int:event_id>")
 def delete_event(event_id):
     """
@@ -813,6 +842,7 @@ def delete_event(event_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.get("/organizations")
 def get_organizations():
@@ -1165,6 +1195,7 @@ def get_organization_by_id(org_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/organizations")
 def create_organization():
     """Create a new organization (only authenticated users)."""
@@ -1198,6 +1229,7 @@ def create_organization():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/organizations/<int:org_id>/apply")
 def apply_to_organization(org_id):
     """User applies to join an organization."""
@@ -1230,6 +1262,7 @@ def apply_to_organization(org_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.post("/organizations/<int:org_id>/applications/<int:app_id>/approve")
 def approve_organization_application(org_id, app_id):
@@ -1268,6 +1301,7 @@ def approve_organization_application(org_id, app_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/organizations/<int:org_id>/applications/<int:app_id>/reject")
 def reject_organization_application(org_id, app_id):
     """Reject a pending organization application (admin or representative only)."""
@@ -1298,6 +1332,7 @@ def reject_organization_application(org_id, app_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.put("/organizations/<int:org_id>")
 def update_organization(org_id):
@@ -1336,6 +1371,7 @@ def update_organization(org_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.delete("/organizations/<int:org_id>")
 def delete_organization(org_id):
     """Delete an organization (only owner or admin)."""
@@ -1355,6 +1391,7 @@ def delete_organization(org_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.get("/organizations/<int:org_id>/applications")
 def get_organization_applications(org_id):
