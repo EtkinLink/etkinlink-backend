@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
-from utils.email import generate_verification_token, verify_token, send_verification_email
+from utils.email import generate_verification_token, verify_token, send_verification_email, init_mail
 from flask_mail import Mail
 
 from flask import Flask, jsonify, request
@@ -16,17 +16,11 @@ from werkzeug.security import check_password_hash, generate_password_hash
 app = Flask(__name__)
 CORS(app)
 
-# Mail konfigürasyonları
+# Secret key ayarı
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER')
 
 # Mail nesnesini oluştur
-mail = Mail(app)
+mail = init_mail(app)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -271,7 +265,7 @@ def register():
                 "email": email,
                 "password": generate_password_hash(password),
                 "name": name,
-                # datetime nesnesini ISO format string'e çevir
+                "username": email.split('@')[0],  # Email'in @ öncesini username olarak kullan
                 "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             }
 
@@ -307,13 +301,14 @@ def verify_email(token):
             # Kullanıcıyı kaydet
             result = conn.execute(
                 text("""
-                    INSERT INTO users (email, password_hash, name) 
-                    VALUES (:email, :password, :name)
+                    INSERT INTO users (email, password_hash, name, username) 
+                    VALUES (:email, :password, :name, :username)
                 """),
                 {
                     "email": payload["email"],
                     "password": payload["password"],
-                    "name": payload["name"]
+                    "name": payload["name"],
+                    "username": payload["email"].split('@')[0]  # Email'in @ öncesini username olarak kullan
                 }
             )
             conn.commit()
