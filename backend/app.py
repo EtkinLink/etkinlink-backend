@@ -199,33 +199,6 @@ def register():
         
         except (ValueError, AttributeError):
             return email_str
-    def normalize_email(email_str):
-        """
-            Normalizes an email address for DB storage and querying.
-            1. Ignores the part after '+'.
-            2. Removes all '.' (dot) characters from the local part.
-            3. Converts the entire address to lowercase.
-            
-            Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
-        """
-        if not email_str:
-            return email_str
-            
-        try:
-            email_str = email_str.strip()
-            local_part, domain_part = email_str.split('@', 1)
-            
-            local_part = local_part.split('+', 1)[0]
-            
-            local_part = local_part.replace('.', '')
-            local_part = local_part.lower()
-            
-            domain_part = domain_part.lower()
-            
-            return f"{local_part}@{domain_part}"
-        
-        except (ValueError, AttributeError):
-            return email_str
     data = request.get_json()
     email = normalize_email(data.get("email", "").strip())
     password = data.get("password", "").strip()
