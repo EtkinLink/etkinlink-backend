@@ -22,38 +22,17 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 # Mail nesnesini oluştur
 mail = init_mail(app)
 
+# Secret key ayarı
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+
+# Mail nesnesini oluştur
+mail = init_mail(app)
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 
-#email normalization
-def normalize_email(email_str):
-    """
-        Normalizes an email address for DB storage and querying.
-        1. Ignores the part after '+'.
-        2. Removes all '.' (dot) characters from the local part.
-        3. Converts the entire address to lowercase.
-        
-        Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
-    """
-    if not email_str:
-        return email_str
-        
-    try:
-        email_str = email_str.strip()
-        local_part, domain_part = email_str.split('@', 1)
-        
-        local_part = local_part.split('+', 1)[0]
-        
-        local_part = local_part.replace('.', '')
-        local_part = local_part.lower()
-        
-        domain_part = domain_part.lower()
-        
-        return f"{local_part}@{domain_part}"
-    
-    except (ValueError, AttributeError):
-        return email_str
+
 
 @app.post("/test-login")
 def test_login():
@@ -82,6 +61,7 @@ def health():
     except Exception as e:
 
         return {"ok": False, "error": str(e)}, 503
+    
     
 
 @app.route("/users/me", methods=["GET", "PUT"])
@@ -192,6 +172,33 @@ def universities():
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
+    def normalize_email(email_str):
+        """
+            Normalizes an email address for DB storage and querying.
+            1. Ignores the part after '+'.
+            2. Removes all '.' (dot) characters from the local part.
+            3. Converts the entire address to lowercase.
+            
+            Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
+        """
+        if not email_str:
+            return email_str
+            
+        try:
+            email_str = email_str.strip()
+            local_part, domain_part = email_str.split('@', 1)
+            
+            local_part = local_part.split('+', 1)[0]
+            
+            local_part = local_part.replace('.', '')
+            local_part = local_part.lower()
+            
+            domain_part = domain_part.lower()
+            
+            return f"{local_part}@{domain_part}"
+        
+        except (ValueError, AttributeError):
+            return email_str
     def normalize_email(email_str):
         """
             Normalizes an email address for DB storage and querying.
