@@ -1239,11 +1239,7 @@ def create_organization():
         user_id = verify_jwt()
 
         data = request.get_json()
-        name = data.get("name", "").strip()
-        description = data.get("description", "").strip()
-        photo_url = data.get("photo_url", "").strip()
-
-        if not name:
+        if not data or "name" not in data:
             return {"error": "Organization name is required"}, 400
 
         with engine.connect() as conn:
