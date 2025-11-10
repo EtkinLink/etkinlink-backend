@@ -4,6 +4,8 @@ import os
 import re
 import uuid
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
+from utils.email import generate_verification_token, verify_token, send_verification_email, init_mail
+from flask_mail import Mail
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -14,39 +16,23 @@ from werkzeug.security import check_password_hash, generate_password_hash
 app = Flask(__name__)
 CORS(app)
 
+# Secret key ayarı
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+
+# Mail nesnesini oluştur
+mail = init_mail(app)
+
+# Secret key ayarı
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+
+# Mail nesnesini oluştur
+mail = init_mail(app)
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 
 
-#email normalization
-def normalize_email(email_str):
-    """
-        Normalizes an email address for DB storage and querying.
-        1. Ignores the part after '+'.
-        2. Removes all '.' (dot) characters from the local part.
-        3. Converts the entire address to lowercase.
-        
-        Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
-    """
-    if not email_str:
-        return email_str
-        
-    try:
-        email_str = email_str.strip()
-        local_part, domain_part = email_str.split('@', 1)
-        
-        local_part = local_part.split('+', 1)[0]
-        
-        local_part = local_part.replace('.', '')
-        local_part = local_part.lower()
-        
-        domain_part = domain_part.lower()
-        
-        return f"{local_part}@{domain_part}"
-    
-    except (ValueError, AttributeError):
-        return email_str
 
 @app.post("/test-login")
 def test_login():
@@ -76,7 +62,7 @@ def health():
 
         return {"ok": False, "error": str(e)}, 503
     
-
+    
 
 @app.route("/users/me", methods=["GET", "PUT"])
 def users_me():
@@ -173,7 +159,6 @@ def users_me():
         return {"error": str(e)}, 503
 
 
-
 @app.get("/universities")
 def universities():
     try:
@@ -184,35 +169,62 @@ def universities():
     except Exception as e:
         return {"error": str(e)}, 503
 
-
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
+    def normalize_email(email_str):
+        """
+            Normalizes an email address for DB storage and querying.
+            1. Ignores the part after '+'.
+            2. Removes all '.' (dot) characters from the local part.
+            3. Converts the entire address to lowercase.
+            
+            Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
+        """
+        if not email_str:
+            return email_str
+            
+        try:
+            email_str = email_str.strip()
+            local_part, domain_part = email_str.split('@', 1)
+            
+            local_part = local_part.split('+', 1)[0]
+            
+            local_part = local_part.replace('.', '')
+            local_part = local_part.lower()
+            
+            domain_part = domain_part.lower()
+            
+            return f"{local_part}@{domain_part}"
+        
+        except (ValueError, AttributeError):
+            return email_str
     data = request.get_json()
-    email = data.get("email")
-    password = data.get("password")
-    username = data.get("username")
-    name = data.get("name")
+    email = normalize_email(data.get("email", "").strip())
+    password = data.get("password", "").strip()
+    name = data.get("name", "").strip()
     
-    normalized_email = normalize_email(email)
+    # Get device and location info from request headers
+    device_info = request.headers.get('User-Agent')
+    # You might want to use a geolocation service here
+    location_info = request.headers.get('X-Location')
 
-    if not normalized_email or not password or not username or not name:
-        return {"error": "Missing fields."}, 400
+    if not email or not password or not name:
+        return {"error": "All fields are required"}, 400
 
     try:
         with engine.connect() as conn:
-            exists = conn.execute(
-                text("SELECT id FROM users WHERE email = :email OR username = :username"),
-                {"email": normalized_email, "username": username}
+            # Email kullanımda mı kontrol et
+            existing_user = conn.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": email}
             ).fetchone()
-
-            if exists:
-                return {"error": "Email or username already in use."}, 409
-
-            password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+            
+            if existing_user:
+                return {"error": "Email already registered"}, 400
             
             try:
-                domain = normalized_email.split('@')[1]
+                domain = email.split('@')[1]
             except IndexError:
                 return {"error": "Invalid email format."}, 400
             
@@ -232,31 +244,78 @@ def register():
             else:
                 return {"error": "University not found."}, 404
 
-            conn.execute(
+            # Token payload'ı hazırla
+            payload = {
+                "email": email,
+                "password": generate_password_hash(password),
+                "name": name,
+                "username": email.split('@')[0],
+                "university_id": university_id,
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+            # Verification token oluştur
+            token = generate_verification_token(payload)
+            
+            try:
+                send_verification_email(
+                    email, 
+                    token,
+                    device_info=device_info,
+                    location_info=location_info
+                )
+                return {"message": "Verification email sent"}, 200
+            except Exception as e:
+                return {"error": f"Failed to send verification email: {str(e)}"}, 500
+
+    except Exception as e:
+        return {"error": f"Registration failed: {str(e)}"}, 503
+
+
+@app.get("/auth/register/verify/<token>")
+def verify_email(token):
+    payload = verify_token(token)
+    if not payload:
+        return {"error": "Invalid or expired verification link"}, 400
+
+    try:
+        with engine.connect() as conn:
+            # Email kullanımda mı tekrar kontrol et
+            existing_user = conn.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": payload["email"]}
+            ).fetchone()
+            
+            if existing_user:
+                return {"error": "Email already registered"}, 400
+
+            # Kullanıcıyı kaydet
+            result = conn.execute(
                 text("""
-                    INSERT INTO users (name, username, email, password_hash, role, university_id)
-                    VALUES (:name, :username, :email, :password_hash, :role, :university_id)
+                    INSERT INTO users (email, password_hash, name, username, university_id) 
+                    VALUES (:email, :password, :name, :username, :university_id)
                 """),
                 {
-                    "name": name,
-                    "username": username,
-                    "email": normalized_email,
-                    "password_hash": password_hash,
-                    "role": "USER",
-                    "university_id": university_id
+                    "email": payload["email"],
+                    "password": payload["password"],
+                    "name": payload["name"],
+                    "username": payload["username"],
+                    "university_id": payload["university_id"]
                 }
             )
             conn.commit()
 
-        return {"message": "Registration successful."}, 201
+            return {"message": "Account verified successfully"}, 200
+
     except Exception as e:
-        return {"error": str(e)}, 503
+        return {"error": f"Verification failed: {str(e)}"}, 503
+
 
 @app.post("/auth/login")
 def login():
     data = request.get_json()
-    email = data.get("email")
-    password = data.get("password")
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
 
     normalized_email = normalize_email(email)
 
@@ -457,6 +516,7 @@ def get_events():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.get("/events/<int:event_id>")
 def get_event_by_id(event_id):
     """
@@ -529,6 +589,7 @@ def get_event_by_id(event_id):
 
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.get("/events/filter")
 def filter_events():
@@ -616,6 +677,7 @@ def filter_events():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.get("/users/<int:user_id>/events")
 def get_user_events(user_id):
     """
@@ -685,6 +747,7 @@ def get_user_events(user_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/events")
 def create_event():
     """
@@ -749,6 +812,7 @@ def create_event():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.put("/events/<int:event_id>")
 def update_event(event_id):
     """
@@ -792,6 +856,7 @@ def update_event(event_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.delete("/events/<int:event_id>")
 def delete_event(event_id):
     """
@@ -813,6 +878,7 @@ def delete_event(event_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.get("/organizations")
 def get_organizations():
@@ -1165,6 +1231,7 @@ def get_organization_by_id(org_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/organizations")
 def create_organization():
     """Create a new organization (only authenticated users)."""
@@ -1198,6 +1265,7 @@ def create_organization():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/organizations/<int:org_id>/apply")
 def apply_to_organization(org_id):
     """User applies to join an organization."""
@@ -1230,6 +1298,7 @@ def apply_to_organization(org_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.post("/organizations/<int:org_id>/applications/<int:app_id>/approve")
 def approve_organization_application(org_id, app_id):
@@ -1268,6 +1337,7 @@ def approve_organization_application(org_id, app_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.post("/organizations/<int:org_id>/applications/<int:app_id>/reject")
 def reject_organization_application(org_id, app_id):
     """Reject a pending organization application (admin or representative only)."""
@@ -1298,6 +1368,7 @@ def reject_organization_application(org_id, app_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.put("/organizations/<int:org_id>")
 def update_organization(org_id):
@@ -1336,6 +1407,7 @@ def update_organization(org_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
+
 @app.delete("/organizations/<int:org_id>")
 def delete_organization(org_id):
     """Delete an organization (only owner or admin)."""
@@ -1355,6 +1427,7 @@ def delete_organization(org_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.get("/organizations/<int:org_id>/applications")
 def get_organization_applications(org_id):
