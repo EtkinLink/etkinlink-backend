@@ -1101,7 +1101,85 @@ def apply_to_event(event_id):
     except Exception as e:
         return {"error": f"An error occurred: {str(e)}"}, 503
 
-#Get applications for an event
+
+@app.delete("/events/<int:event_id>/participants/<int:target_user_id>")
+def manage_event_participation(event_id, target_user_id):
+    """
+    Allows:
+    - Participants to leave an event.
+    - Applicants to withdraw their application.
+    - Event owners (or org admins) to remove participants.
+    """
+    try:
+        user_id = verify_jwt()
+
+        with engine.connect() as conn:
+            
+            participant = conn.execute(text("""
+                SELECT id, status FROM participants
+                WHERE event_id = :eid AND user_id = :uid
+            """), {"eid": event_id, "uid": target_user_id}).fetchone()
+
+            application = conn.execute(text("""
+                SELECT id, status FROM applications
+                WHERE event_id = :eid AND user_id = :uid
+            """), {"eid": event_id, "uid": target_user_id}).fetchone()
+
+            
+            if not participant and not application:
+                return {"error": "User is neither a participant nor an applicant for this event."}, 404
+
+            
+            if user_id == target_user_id:
+                if participant:
+                    conn.execute(text("""
+                        DELETE FROM participants
+                        WHERE event_id = :eid AND user_id = :uid
+                    """), {"eid": event_id, "uid": target_user_id})
+                    conn.commit()
+                    return {"message": "You have successfully left the event."}, 200
+
+                if application and application.status == "PENDING":
+                    conn.execute(text("""
+                        DELETE FROM applications
+                        WHERE event_id = :eid AND user_id = :uid
+                    """), {"eid": event_id, "uid": target_user_id})
+                    conn.commit()
+                    return {"message": "Application withdrawn successfully."}, 200
+
+                return {"error": "You cannot withdraw after being accepted or rejected."}, 403
+
+            
+            else:
+                try:
+                    check_event_ownership(conn, event_id, user_id)
+                except AuthError as auth_err:
+                    return {"error": auth_err.args[0]}, auth_err.code
+
+                if participant:
+                    conn.execute(text("""
+                        DELETE FROM participants
+                        WHERE event_id = :eid AND user_id = :uid
+                    """), {"eid": event_id, "uid": target_user_id})
+                    conn.commit()
+                    return {"message": "Participant removed successfully."}, 200
+
+                if application:
+                    conn.execute(text("""
+                        DELETE FROM applications
+                        WHERE event_id = :eid AND user_id = :uid
+                    """), {"eid": event_id, "uid": target_user_id})
+                    conn.commit()
+                    return {"message": "Application deleted successfully."}, 200
+
+        return {"error": "No action performed."}, 400
+
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": f"Internal error: {str(e)}"}, 503
+
+
 @app.get("/events/<int:event_id>/applications")
 def get_event_applications(event_id):
     """
