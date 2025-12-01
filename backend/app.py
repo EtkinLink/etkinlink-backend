@@ -639,11 +639,10 @@ def get_event_by_id(event_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
-
 @app.get("/events/filter")
 def filter_events():
     """
-    Filters events by type, date range, university, and search query.
+    Filters events by type, date range, university, organization, search query AND PRICE.
     Works for both user and organization events.
     """
     try:
@@ -653,6 +652,9 @@ def filter_events():
         search = request.args.get("q")
         university = request.args.get("university")  # can be name or id
         organization = request.args.get("organization")
+        
+        min_price = request.args.get("min_price")
+        max_price = request.args.get("max_price")
 
         filters = []
         params = {}
@@ -674,9 +676,8 @@ def filter_events():
             filters.append("(e.title LIKE :search OR o.name LIKE :search OR u.username LIKE :search)")
             params["search"] = f"%{search}%"
 
-        # --- NEW: University filter ---
+        # --- University filter ---
         if university:
-            # Try numeric first (ID), else match by name
             if university.isdigit():
                 filters.append("un.id = :university_id")
                 params["university_id"] = int(university)
@@ -684,14 +685,23 @@ def filter_events():
                 filters.append("un.name LIKE :university_name")
                 params["university_name"] = f"%{university}%"
 
+        # --- Organization filter ---
         if organization:
-            # ID or name filter for organizations
             if organization.isdigit():
                 filters.append("o.id = :organization_id")
                 params["organization_id"] = int(organization)
             else:
                 filters.append("o.name LIKE :organization_name")
                 params["organization_name"] = f"%{organization}%"
+
+        # --- Price filter ---
+        if min_price:
+            filters.append("e.price >= :min_price")
+            params["min_price"] = float(min_price)
+        
+        if max_price:
+            filters.append("e.price <= :max_price")
+            params["max_price"] = float(max_price)
 
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
 
@@ -703,6 +713,7 @@ def filter_events():
                     e.starts_at,
                     e.ends_at,
                     e.location_name,
+                    e.price,  
                     e.status,
                     e.created_at,
                     e.owner_type,
@@ -723,9 +734,10 @@ def filter_events():
 
         return jsonify(rows)
 
+    except ValueError:
+        return {"error": "Invalid format for price or ID fields"}, 400
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @app.get("/users/<int:user_id>/events")
 def get_user_events(user_id):
