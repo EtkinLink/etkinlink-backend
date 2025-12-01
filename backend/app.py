@@ -569,9 +569,21 @@ def get_events():
 @app.get("/events/<int:event_id>")
 def get_event_by_id(event_id):
     """
-    Returns detailed info about a specific event, including participants and applications.
+    Returns detailed info about a specific event.
+    Hides participants if 'is_participants_private' is True and user is not owner.
     """
     try:
+
+        current_user_id = None
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            try:
+                token = auth_header.split(" ", 1)[1]
+                payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+                current_user_id = payload.get("userId")
+            except:
+                pass 
+
         with engine.connect() as conn:
             event = conn.execute(text("""
                 SELECT 
@@ -590,6 +602,8 @@ def get_event_by_id(event_id):
                     e.updated_at,
                     e.owner_type,
                     e.owner_organization_id,
+                    e.owner_user_id,          -- Auth kontrolü için gerekli
+                    e.is_participants_private,-- Kontrol bayrağı
                     u.username AS owner_username,
                     o.name AS owner_organization_name,
                     et.code AS event_type
@@ -603,19 +617,37 @@ def get_event_by_id(event_id):
             if not event:
                 return {"error": "Event not found"}, 404
 
-            participants = conn.execute(text("""
-                SELECT 
-                    u.id,
-                    u.username,
-                    p.status
-                FROM participants p
-                JOIN users u ON u.id = p.user_id
-                WHERE p.event_id = :id
-            """), {"id": event_id}).fetchall()
+            show_participants = True
+            
+            if event.is_participants_private:
+                show_participants = False
+                
+                if event.owner_type == 'USER' and current_user_id == event.owner_user_id:
+                    show_participants = True
+                
+                elif event.owner_type == 'ORGANIZATION' and current_user_id:
+                    org_member = conn.execute(text("""
+                        SELECT role FROM organization_members 
+                        WHERE organization_id = :oid AND user_id = :uid
+                    """), {"oid": event.owner_organization_id, "uid": current_user_id}).fetchone()
+                    
+                    if org_member and org_member.role in ['ADMIN', 'REPRESENTATIVE']:
+                        show_participants = True
 
-            # Include applications if event belongs to an organization
+            participants = []
+            if show_participants:
+                participants = conn.execute(text("""
+                    SELECT 
+                        u.id,
+                        u.username,
+                        p.status
+                    FROM participants p
+                    JOIN users u ON u.id = p.user_id
+                    WHERE p.event_id = :id
+                """), {"id": event_id}).fetchall()
+
             applications = []
-            if event.owner_type == "ORGANIZATION" and event.owner_organization_id:
+            if show_participants and event.owner_type == "ORGANIZATION" and event.owner_organization_id:
                 applications = conn.execute(text("""
                     SELECT 
                         a.id,
@@ -631,8 +663,15 @@ def get_event_by_id(event_id):
                 """), {"org_id": event.owner_organization_id}).fetchall()
 
         event_data = dict(event._mapping)
-        event_data["participants"] = [dict(p._mapping) for p in participants]
-        event_data["applications"] = [dict(a._mapping) for a in applications]
+        
+        event_data["is_participants_private"] = bool(event.is_participants_private)
+        
+        if not show_participants:
+             event_data["participants"] = None 
+             event_data["applications"] = [] 
+        else:
+             event_data["participants"] = [dict(p._mapping) for p in participants]
+             event_data["applications"] = [dict(a._mapping) for a in applications]
 
         return jsonify(event_data)
 
@@ -814,6 +853,9 @@ def create_event():
 
         owner_type = data.get("owner_type", "USER").upper()
         org_id = data.get("organization_id") if owner_type == "ORGANIZATION" else None
+        
+        # get privacy settings -> default False/Public
+        is_participants_private = data.get("is_participants_private", False)
 
         # If organization, check if user is admin/member of it
         if owner_type == "ORGANIZATION":
@@ -826,13 +868,17 @@ def create_event():
                     owner_user_id, owner_type, owner_organization_id,
                     title, explanation, type_id, price,
                     starts_at, ends_at, location_name, photo_url,
-                    status, user_limit, latitude, longitude, created_at, updated_at
+                    status, user_limit, latitude, longitude, 
+                    is_participants_private, -- YENİ SÜTUN
+                    created_at, updated_at
                 )
                 VALUES (
                     :owner_user_id, :owner_type, :owner_organization_id,
                     :title, :explanation, :type_id, :price,
                     :starts_at, :ends_at, :location_name, :photo_url,
-                    'FUTURE', :user_limit, :latitude, :longitude, NOW(), NOW()
+                    'FUTURE', :user_limit, :latitude, :longitude, 
+                    :is_participants_private, -- YENİ DEĞER
+                    NOW(), NOW()
                 )
             """)
 
@@ -851,6 +897,7 @@ def create_event():
                 "user_limit": data.get("user_limit"),
                 "latitude": data.get("latitude"),
                 "longitude": data.get("longitude"),
+                "is_participants_private": is_participants_private 
             })
             conn.commit()
 
@@ -860,7 +907,6 @@ def create_event():
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @app.put("/events/<int:event_id>")
 def update_event(event_id):
@@ -881,7 +927,8 @@ def update_event(event_id):
             allowed_fields = {
                 "title", "explanation", "price", "starts_at", "ends_at",
                 "location_name", "photo_url", "status", "user_limit",
-                "latitude", "longitude", "type_id"
+                "latitude", "longitude", "type_id",
+                "is_participants_private" 
             }
             updates = {k: v for k, v in data.items() if k in allowed_fields}
 
