@@ -3,6 +3,7 @@ from functools import wraps
 import os
 import re
 import uuid
+import secrets
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
 
 from flask import Flask, jsonify, request
@@ -65,6 +66,110 @@ def test_login():
 
     except Exception as e:
         return {"error": str(e)}, 500
+
+@app.post("/auth/forgot-password")
+def forgot_password():
+    data = request.get_json()
+    email = data.get("email")
+    
+    normalized_email = normalize_email(email)
+    
+    if not normalized_email:
+        return {"error": "Email is required"}, 400
+
+    try:
+        with engine.connect() as conn:
+            user = conn.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": normalized_email}
+            ).fetchone()
+
+            if not user:
+                return {"error": "User not found"}, 404
+
+            token = secrets.token_urlsafe(32)
+            expires_at = datetime.utcnow() + timedelta(hours=1)
+
+            conn.execute(
+                text("""
+                    UPDATE users 
+                    SET reset_password_token = :token, 
+                        reset_password_expires = :expires 
+                    WHERE email = :email
+                """),
+                {
+                    "token": token,
+                    "expires": expires_at,
+                    "email": normalized_email
+                }
+            )
+            conn.commit()
+            
+            # -----------------------------------------------------------------------
+            # TODO: SMTP / EMAIL ENTEGRASYONU BURAYA GELECEK
+            # -----------------------------------------------------------------------
+
+            reset_link = f"http://localhost:3000/reset-password?token={token}"
+
+            return {
+                "message": "Reset token generated successfully.",
+                "token": token,          
+                "reset_link": reset_link 
+            }, 200
+
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@app.post("/auth/reset-password")
+def reset_password_action():
+    data = request.get_json()
+    token = data.get("token")
+    new_password = data.get("new_password")
+
+    if not token or not new_password:
+        return {"error": "Token and new password are required"}, 400
+    
+    if len(new_password) < 6:
+        return {"error": "Password must be at least 6 characters"}, 400
+
+    try:
+        with engine.connect() as conn:
+            user = conn.execute(
+                text("""
+                    SELECT id 
+                    FROM users 
+                    WHERE reset_password_token = :token 
+                      AND reset_password_expires > NOW()
+                """),
+                {"token": token}
+            ).fetchone()
+
+            if not user:
+                return {"error": "Invalid or expired token"}, 400
+
+            new_hash = generate_password_hash(new_password, method='pbkdf2:sha256')
+
+            conn.execute(
+                text("""
+                    UPDATE users 
+                    SET password_hash = :p_hash,
+                        reset_password_token = NULL,
+                        reset_password_expires = NULL
+                    WHERE id = :uid
+                """),
+                {
+                    "p_hash": new_hash,
+                    "uid": user.id
+                }
+            )
+            conn.commit()
+
+            return {"message": "Password has been reset successfully."}, 200
+
+    except Exception as e:
+        return {"error": str(e)}, 503
+    
 
 @app.get("/health")
 def health():
