@@ -55,9 +55,7 @@ def send_confirmation_email(user_email, subject, html_body):
 
 def generate_verification_token(payload):
     """Kullanıcı bilgileri için verification token oluşturur"""
-    # Token'a expire time ekliyoruz (30 dakika)
     payload['exp'] = datetime.utcnow() + timedelta(minutes=30)
-    # Token'ı oluştur
     token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
     return token
 
@@ -77,7 +75,6 @@ def send_verification_email(email, token, device_info=None, location_info=None):
         verification_url = url_for('verify_email', token=token, _external=True)
         subject = "EtkinLink - Email Doğrulama"
         
-        # Default values if not provided
         device_info = device_info or "-"
         location_info = location_info or "-"
         
@@ -90,3 +87,31 @@ def send_verification_email(email, token, device_info=None, location_info=None):
         return send_confirmation_email(email, subject, html_body)
     except Exception as e:
         raise Exception(f"Verification email failed: {str(e)}")
+
+def send_password_reset_email(to_email, reset_token):
+    """
+    Şifre sıfırlama maili gönderir.
+    Backend'de oluşturulan 'secrets' token'ını kullanır.
+    FRONTEND_URL ortam değişkenini kullanır, yoksa localhost'a düşer.
+    """
+    # Production env variable -> FRONTEND_URL=https://etkinlink.com gibi
+    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+    reset_url = f"{frontend_url}/reset-password?token={reset_token}"
+    
+    subject = "EtkinLink - Şifre Sıfırlama Talebi"
+    
+    html_body = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2>Şifrenizi mi unuttunuz?</h2>
+        <p>Hesabınız için bir şifre sıfırlama talebi aldık.</p>
+        <p>Şifrenizi yenilemek için aşağıdaki butona tıklayın:</p>
+        <a href="{reset_url}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+            Şifremi Sıfırla
+        </a>
+        <p>veya şu linki tarayıcınıza yapıştırın:</p>
+        <p>{reset_url}</p>
+        <p>Link 1 saat boyunca geçerlidir.</p>
+    </div>
+    """
+    
+    return send_confirmation_email(to_email, subject, html_body)
