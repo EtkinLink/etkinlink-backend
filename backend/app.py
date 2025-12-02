@@ -5,6 +5,7 @@ import re
 import uuid
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
 from utils.email import generate_verification_token, verify_token, send_verification_email, init_mail
+from utils.pagination import paginate_query, get_pagination_params
 from flask_mail import Mail
 
 from flask import Flask, jsonify, request
@@ -160,47 +161,70 @@ def users_me():
 
 @app.get("/users/me/organizations")
 def get_my_organizations():
-    """List organizations the authenticated user has joined or applied to."""
+    """
+    List organizations the authenticated user has joined or applied to.
+    Supports pagination with ?page=1&per_page=20 parameters.
+    """
     try:
-        user_id = verify_jwt()  # ✅ JWT doğrulama (token’dan user_id alır)
+        user_id = verify_jwt()  # ✅ JWT doğrulama (token'dan user_id alır)
+        pagination_params = get_pagination_params()
 
         with engine.connect() as conn:
-            # Üye olunan organizasyonlar
-            member_orgs = conn.execute(text("""
-                SELECT 
-                    o.id,
-                    o.name,
-                    o.description,
-                    m.role,
-                    'MEMBER' AS relation,
-                    m.joined_at
-                FROM organization_members m
-                JOIN organizations o ON o.id = m.organization_id
-                WHERE m.user_id = :uid
-            """), {"uid": user_id}).fetchall()
-
-            # Başvurulan organizasyonlar (henüz üye olunmamış)
-            applied_orgs = conn.execute(text("""
-                SELECT 
-                    o.id,
-                    o.name,
-                    o.description,
-                    a.status,
-                    'APPLIED' AS relation,
-                    a.created_at AS date
-                FROM organization_applications a
-                JOIN organizations o ON o.id = a.organization_id
-                WHERE a.user_id = :uid
-                AND a.organization_id NOT IN (
-                    SELECT organization_id FROM organization_members WHERE user_id = :uid
+            # Combined query for both member and applied organizations
+            base_query = """
+                (
+                    SELECT 
+                        o.id,
+                        o.name,
+                        o.description,
+                        m.role,
+                        'MEMBER' AS relation,
+                        m.joined_at AS date
+                    FROM organization_members m
+                    JOIN organizations o ON o.id = m.organization_id
+                    WHERE m.user_id = :uid
                 )
-            """), {"uid": user_id}).fetchall()
-
-        # JSON formatına çevir
-        organizations = [dict(r._mapping) for r in member_orgs] + [dict(r._mapping) for r in applied_orgs]
-        organizations.sort(key=lambda x: x.get("joined_at") or x.get("date"), reverse=True)
-
-        return jsonify(organizations)
+                UNION
+                (
+                    SELECT 
+                        o.id,
+                        o.name,
+                        o.description,
+                        a.status AS role,
+                        'APPLIED' AS relation,
+                        a.created_at AS date
+                    FROM organization_applications a
+                    JOIN organizations o ON o.id = a.organization_id
+                    WHERE a.user_id = :uid
+                    AND a.organization_id NOT IN (
+                        SELECT organization_id FROM organization_members WHERE user_id = :uid
+                    )
+                )
+                ORDER BY date DESC
+            """
+            
+            count_query = """
+                SELECT COUNT(*) FROM (
+                    SELECT o.id
+                    FROM organization_members m
+                    JOIN organizations o ON o.id = m.organization_id
+                    WHERE m.user_id = :uid
+                    
+                    UNION
+                    
+                    SELECT o.id
+                    FROM organization_applications a
+                    JOIN organizations o ON o.id = a.organization_id
+                    WHERE a.user_id = :uid
+                    AND a.organization_id NOT IN (
+                        SELECT organization_id FROM organization_members WHERE user_id = :uid
+                    )
+                ) AS combined_orgs
+            """
+            
+            params = {"uid": user_id}
+            result = paginate_query(conn, base_query, count_query, params, pagination_params)
+            return jsonify(result)
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code  # 🔒 Token hatalarını düzgün döndür
@@ -428,11 +452,15 @@ def event_types():
 
 @app.get("/users/me/events")
 def get_my_events_and_tickets():
+    """
+    Get authenticated user's events and tickets.
+    Supports pagination with ?page=1&per_page=20 parameters.
+    """
     try:
         user_id = verify_jwt() 
 
         with engine.connect() as conn:
-            query = text("""
+            base_query = """
                 SELECT 
                     e.id AS event_id,
                     e.title AS event_title,
@@ -444,12 +472,18 @@ def get_my_events_and_tickets():
                 JOIN events e ON e.id = p.event_id
                 WHERE p.user_id = :uid
                 ORDER BY e.starts_at DESC
-            """)
+            """
             
-            result = conn.execute(query, {"uid": user_id})
-            my_events = [dict(r._mapping) for r in result]
-
-        return jsonify(my_events)
+            count_query = """
+                SELECT COUNT(*) 
+                FROM participants p
+                JOIN events e ON e.id = p.event_id
+                WHERE p.user_id = :uid
+            """
+            
+            params = {"uid": user_id}
+            result = paginate_query(conn, base_query, count_query, params)
+            return jsonify(result)
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code
@@ -526,10 +560,11 @@ def check_in_participant(event_id):
 def get_events():
     """
     Returns all events (user or organization owned) with type, owner info, and participant count.
+    Supports pagination with ?page=1&per_page=20 parameters.
     """
     try:
         with engine.connect() as conn:
-            query = text("""
+            base_query = """
                 SELECT 
                     e.id,
                     e.title,
@@ -557,11 +592,16 @@ def get_events():
                 LEFT JOIN organizations o ON e.owner_organization_id = o.id
                 LEFT JOIN event_types et ON e.type_id = et.id
                 ORDER BY e.starts_at ASC
-            """)
-            result = conn.execute(query)
-            rows = [dict(r._mapping) for r in result]
-
-        return jsonify(rows)
+            """
+            
+            count_query = """
+                SELECT COUNT(*) 
+                FROM events e
+            """
+            
+            result = paginate_query(conn, base_query, count_query)
+            return jsonify(result)
+            
     except Exception as e:
         return {"error": str(e)}, 503
 
@@ -645,6 +685,7 @@ def filter_events():
     """
     Filters events by type, date range, university, and search query.
     Works for both user and organization events.
+    Supports pagination with ?page=1&per_page=20 parameters.
     """
     try:
         type_code = request.args.get("type")
@@ -671,7 +712,14 @@ def filter_events():
             params["to_date"] = to_date
 
         if search:
-            filters.append("(e.title LIKE :search OR o.name LIKE :search OR u.username LIKE :search)")
+            # Case-insensitive search across multiple fields including explanation
+            filters.append("""(
+                LOWER(e.title) LIKE LOWER(:search) OR 
+                LOWER(e.explanation) LIKE LOWER(:search) OR 
+                LOWER(o.name) LIKE LOWER(:search) OR 
+                LOWER(u.username) LIKE LOWER(:search) OR
+                LOWER(e.location_name) LIKE LOWER(:search)
+            )""")
             params["search"] = f"%{search}%"
 
         # --- NEW: University filter ---
@@ -681,7 +729,7 @@ def filter_events():
                 filters.append("un.id = :university_id")
                 params["university_id"] = int(university)
             else:
-                filters.append("un.name LIKE :university_name")
+                filters.append("LOWER(un.name) LIKE LOWER(:university_name)")
                 params["university_name"] = f"%{university}%"
 
         if organization:
@@ -690,13 +738,13 @@ def filter_events():
                 filters.append("o.id = :organization_id")
                 params["organization_id"] = int(organization)
             else:
-                filters.append("o.name LIKE :organization_name")
+                filters.append("LOWER(o.name) LIKE LOWER(:organization_name)")
                 params["organization_name"] = f"%{organization}%"
 
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
 
         with engine.connect() as conn:
-            query = text(f"""
+            base_query = f"""
                 SELECT 
                     e.id,
                     e.title,
@@ -717,11 +765,20 @@ def filter_events():
                 LEFT JOIN universities un ON u.university_id = un.id
                 {where_clause}
                 ORDER BY e.starts_at ASC
-            """)
-            result = conn.execute(query, params)
-            rows = [dict(r._mapping) for r in result]
-
-        return jsonify(rows)
+            """
+            
+            count_query = f"""
+                SELECT COUNT(*) 
+                FROM events e
+                LEFT JOIN event_types et ON e.type_id = et.id
+                LEFT JOIN users u ON e.owner_user_id = u.id
+                LEFT JOIN organizations o ON e.owner_organization_id = o.id
+                LEFT JOIN universities un ON u.university_id = un.id
+                {where_clause}
+            """
+            
+            result = paginate_query(conn, base_query, count_query, params)
+            return jsonify(result)
 
     except Exception as e:
         return {"error": str(e)}, 503
@@ -731,68 +788,86 @@ def filter_events():
 def get_user_events(user_id):
     """
     Returns events that the user has participated in or owns, plus events of organizations they applied to.
+    Supports pagination with ?page=1&per_page=20 parameters.
     """
     try:
+        pagination_params = get_pagination_params()
+        
         with engine.connect() as conn:
-            # Get participant events
-            participant_events = conn.execute(text("""
-                SELECT 
-                    e.id,
-                    e.title,
-                    e.starts_at,
-                    e.ends_at,
-                    e.location_name,
-                    e.status,
-                    e.created_at,
-                    e.owner_type,
-                    et.code AS event_type,
-                    p.status AS participation_status,
-                    o.name AS owner_organization_name,
-                    u.username AS owner_username
-                FROM participants p
-                JOIN events e ON e.id = p.event_id
-                LEFT JOIN event_types et ON e.type_id = et.id
-                LEFT JOIN organizations o ON e.owner_organization_id = o.id
-                LEFT JOIN users u ON e.owner_user_id = u.id
-                WHERE p.user_id = :uid
-                ORDER BY e.starts_at DESC
-            """), {"uid": user_id}).fetchall()
-
-            # Get events of organizations the user has applied to
-            applied_org_events = conn.execute(text("""
-                SELECT 
-                    e.id,
-                    e.title,
-                    e.starts_at,
-                    e.ends_at,
-                    e.location_name,
-                    e.status,
-                    e.created_at,
-                    e.owner_type,
-                    et.code AS event_type,
-                    'APPLIED' AS participation_status,
-                    o.name AS owner_organization_name,
-                    u.username AS owner_username
-                FROM organization_applications a
-                JOIN events e ON e.owner_organization_id = a.organization_id
-                LEFT JOIN event_types et ON e.type_id = et.id
-                LEFT JOIN organizations o ON e.owner_organization_id = o.id
-                LEFT JOIN users u ON e.owner_user_id = u.id
-                WHERE a.user_id = :uid
-                AND e.id NOT IN (
-                    SELECT p.event_id FROM participants p WHERE p.user_id = :uid
+            # Combined query for both participant events and applied org events
+            base_query = """
+                (
+                    SELECT 
+                        e.id,
+                        e.title,
+                        e.starts_at,
+                        e.ends_at,
+                        e.location_name,
+                        e.status,
+                        e.created_at,
+                        e.owner_type,
+                        et.code AS event_type,
+                        p.status AS participation_status,
+                        o.name AS owner_organization_name,
+                        u.username AS owner_username
+                    FROM participants p
+                    JOIN events e ON e.id = p.event_id
+                    LEFT JOIN event_types et ON e.type_id = et.id
+                    LEFT JOIN organizations o ON e.owner_organization_id = o.id
+                    LEFT JOIN users u ON e.owner_user_id = u.id
+                    WHERE p.user_id = :uid
                 )
-                ORDER BY e.starts_at DESC
-            """), {"uid": user_id}).fetchall()
-
-            # Merge the results
-            all_events = [dict(r._mapping) for r in participant_events]
-            all_events.extend([dict(r._mapping) for r in applied_org_events])
-
-            # Sort by starts_at descending
-            all_events.sort(key=lambda x: x['starts_at'], reverse=True)
-
-        return jsonify(all_events)
+                UNION
+                (
+                    SELECT 
+                        e.id,
+                        e.title,
+                        e.starts_at,
+                        e.ends_at,
+                        e.location_name,
+                        e.status,
+                        e.created_at,
+                        e.owner_type,
+                        et.code AS event_type,
+                        'APPLIED' AS participation_status,
+                        o.name AS owner_organization_name,
+                        u.username AS owner_username
+                    FROM organization_applications a
+                    JOIN events e ON e.owner_organization_id = a.organization_id
+                    LEFT JOIN event_types et ON e.type_id = et.id
+                    LEFT JOIN organizations o ON e.owner_organization_id = o.id
+                    LEFT JOIN users u ON e.owner_user_id = u.id
+                    WHERE a.user_id = :uid
+                    AND e.id NOT IN (
+                        SELECT p.event_id FROM participants p WHERE p.user_id = :uid
+                    )
+                )
+                ORDER BY starts_at DESC
+            """
+            
+            count_query = """
+                SELECT COUNT(*) FROM (
+                    SELECT e.id
+                    FROM participants p
+                    JOIN events e ON e.id = p.event_id
+                    WHERE p.user_id = :uid
+                    
+                    UNION
+                    
+                    SELECT e.id
+                    FROM organization_applications a
+                    JOIN events e ON e.owner_organization_id = a.organization_id
+                    WHERE a.user_id = :uid
+                    AND e.id NOT IN (
+                        SELECT p.event_id FROM participants p WHERE p.user_id = :uid
+                    )
+                ) AS combined_events
+            """
+            
+            params = {"uid": user_id}
+            result = paginate_query(conn, base_query, count_query, params, pagination_params)
+            return jsonify(result)
+            
     except Exception as e:
         return {"error": str(e)}, 503
 
@@ -931,10 +1006,13 @@ def delete_event(event_id):
 
 @app.get("/organizations")
 def get_organizations():
-    """List all organizations with member count and owner info."""
+    """
+    List all organizations with member count and owner info.
+    Supports pagination with ?page=1&per_page=20 parameters.
+    """
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            base_query = """
                 SELECT 
                     o.id,
                     o.name,
@@ -950,9 +1028,16 @@ def get_organizations():
                 FROM organizations o
                 LEFT JOIN users u ON o.owner_user_id = u.id
                 ORDER BY o.name ASC
-            """))
-            rows = [dict(r._mapping) for r in result]
-        return jsonify(rows)
+            """
+            
+            count_query = """
+                SELECT COUNT(*) 
+                FROM organizations o
+            """
+            
+            result = paginate_query(conn, base_query, count_query)
+            return jsonify(result)
+            
     except Exception as e:
         return {"error": str(e)}, 503
     
@@ -1251,6 +1336,7 @@ def get_event_applications(event_id):
     """
     Lists all applications for a specific event.
     Only the event owner (user or org admin/rep) can access this.
+    Supports pagination with ?page=1&per_page=20 parameters.
     """
     try:
         user_id = verify_jwt()
@@ -1262,7 +1348,7 @@ def get_event_applications(event_id):
             except AuthError as auth_err:
                 return {"error": auth_err.args[0]}, auth_err.code
 
-            query = text("""
+            base_query = """
                 SELECT 
                     a.id AS application_id,
                     a.user_id,
@@ -1275,12 +1361,17 @@ def get_event_applications(event_id):
                 JOIN users u ON a.user_id = u.id
                 WHERE a.event_id = :eid
                 ORDER BY a.status ASC, a.created_at DESC
-            """)
+            """
             
-            result = conn.execute(query, {"eid": event_id})
-            applications = [dict(r._mapping) for r in result]
-
-        return jsonify(applications)
+            count_query = """
+                SELECT COUNT(*) 
+                FROM applications a
+                WHERE a.event_id = :eid
+            """
+            
+            params = {"eid": event_id}
+            result = paginate_query(conn, base_query, count_query, params)
+            return jsonify(result)
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code
@@ -1631,7 +1722,10 @@ def delete_organization(org_id):
 
 @app.get("/organizations/<int:org_id>/applications")
 def get_organization_applications(org_id):
-    """List all applications for a specific organization (admin/representative only)."""
+    """
+    List all applications for a specific organization (admin/representative only).
+    Supports pagination with ?page=1&per_page=20 parameters.
+    """
     try:
         user_id = verify_jwt()
 
@@ -1639,7 +1733,7 @@ def get_organization_applications(org_id):
             # Role check
             check_organization_permission(conn, org_id, user_id, ["ADMIN", "REPRESENTATIVE"])
 
-            result = conn.execute(text("""
+            base_query = """
                 SELECT 
                     a.id,
                     a.user_id,
@@ -1651,11 +1745,17 @@ def get_organization_applications(org_id):
                 JOIN users u ON a.user_id = u.id
                 WHERE a.organization_id = :oid
                 ORDER BY a.created_at DESC
-            """), {"oid": org_id})
-
-            rows = [dict(r._mapping) for r in result]
-
-        return jsonify(rows)
+            """
+            
+            count_query = """
+                SELECT COUNT(*) 
+                FROM organization_applications a
+                WHERE a.organization_id = :oid
+            """
+            
+            params = {"oid": org_id}
+            result = paginate_query(conn, base_query, count_query, params)
+            return jsonify(result)
     
     except AuthError as e:
         return {"error": e.args[0]}, e.code
