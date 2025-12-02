@@ -3,8 +3,9 @@ from functools import wraps
 import os
 import re
 import uuid
+import secrets
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
-from utils.email import generate_verification_token, verify_token, send_verification_email, init_mail
+from utils.mail_service import generate_verification_token, verify_token, send_verification_email, init_mail, send_password_reset_email
 from flask_mail import Mail
 
 from flask import Flask, jsonify, request
@@ -22,15 +23,38 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 # Mail nesnesini oluştur
 mail = init_mail(app)
 
-# Secret key ayarı
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-
-# Mail nesnesini oluştur
-mail = init_mail(app)
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+
+
+def normalize_email(email_str):
+    """
+        Normalizes an email address for DB storage and querying.
+        1. Ignores the part after '+'.
+        2. Removes all '.' (dot) characters from the local part.
+        3. Converts the entire address to lowercase.
+        
+        Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
+    """
+    if not email_str:
+        return email_str
+        
+    try:
+        email_str = email_str.strip()
+        local_part, domain_part = email_str.split('@', 1)
+        
+        local_part = local_part.split('+', 1)[0]
+        
+        local_part = local_part.replace('.', '')
+        local_part = local_part.lower()
+        
+        domain_part = domain_part.lower()
+        
+        return f"{local_part}@{domain_part}"
+    
+    except (ValueError, AttributeError):
+        return email_str
 
 
 
@@ -221,33 +245,7 @@ def universities():
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
-    def normalize_email(email_str):
-        """
-            Normalizes an email address for DB storage and querying.
-            1. Ignores the part after '+'.
-            2. Removes all '.' (dot) characters from the local part.
-            3. Converts the entire address to lowercase.
-            
-            Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
-        """
-        if not email_str:
-            return email_str
-            
-        try:
-            email_str = email_str.strip()
-            local_part, domain_part = email_str.split('@', 1)
-            
-            local_part = local_part.split('+', 1)[0]
-            
-            local_part = local_part.replace('.', '')
-            local_part = local_part.lower()
-            
-            domain_part = domain_part.lower()
-            
-            return f"{local_part}@{domain_part}"
-        
-        except (ValueError, AttributeError):
-            return email_str
+
     data = request.get_json()
     email = normalize_email(data.get("email", "").strip())
     password = data.get("password", "").strip()
@@ -358,6 +356,107 @@ def verify_email(token):
 
     except Exception as e:
         return {"error": f"Verification failed: {str(e)}"}, 503
+
+
+@app.post("/auth/forgot-password")
+def forgot_password():
+    data = request.get_json()
+    email = data.get("email")
+    
+    normalized_email = normalize_email(email)
+    
+    if not normalized_email:
+        return {"error": "Email is required"}, 400
+
+    try:
+        with engine.connect() as conn:
+            user = conn.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": normalized_email}
+            ).fetchone()
+
+            if not user:
+                return {"error": "User not found"}, 404
+
+            # Token oluştur
+            token = secrets.token_urlsafe(32)
+            expires_at = datetime.utcnow() + timedelta(hours=1)
+
+            # DB Güncelle
+            conn.execute(
+                text("""
+                    UPDATE users 
+                    SET reset_password_token = :token, 
+                        reset_password_expires = :expires 
+                    WHERE email = :email
+                """),
+                {
+                    "token": token,
+                    "expires": expires_at,
+                    "email": normalized_email
+                }
+            )
+            conn.commit()
+            
+            # Mail Gönder (Pylance hatasını çözen kısım burası)
+            try:
+                send_password_reset_email(normalized_email, token)
+                return {"message": "Password reset link sent to your email."}, 200
+            except Exception as mail_error:
+                return {"error": f"Failed to send email: {str(mail_error)}"}, 500
+
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@app.post("/auth/reset-password")
+def reset_password_action():
+    data = request.get_json()
+    token = data.get("token")
+    new_password = data.get("new_password")
+
+    if not token or not new_password:
+        return {"error": "Token and new password are required"}, 400
+    
+    if len(new_password) < 6:
+        return {"error": "Password must be at least 6 characters"}, 400
+
+    try:
+        with engine.connect() as conn:
+            user = conn.execute(
+                text("""
+                    SELECT id 
+                    FROM users 
+                    WHERE reset_password_token = :token 
+                      AND reset_password_expires > NOW()
+                """),
+                {"token": token}
+            ).fetchone()
+
+            if not user:
+                return {"error": "Invalid or expired token"}, 400
+
+            new_hash = generate_password_hash(new_password)
+
+            conn.execute(
+                text("""
+                    UPDATE users 
+                    SET password_hash = :p_hash,
+                        reset_password_token = NULL,
+                        reset_password_expires = NULL
+                    WHERE id = :uid
+                """),
+                {
+                    "p_hash": new_hash,
+                    "uid": user.id
+                }
+            )
+            conn.commit()
+
+            return {"message": "Password has been reset successfully."}, 200
+
+    except Exception as e:
+        return {"error": str(e)}, 503
 
 
 @app.post("/auth/login")
