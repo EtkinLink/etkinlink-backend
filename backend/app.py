@@ -708,20 +708,12 @@ def get_events():
 @app.get("/events/<int:event_id>")
 def get_event_by_id(event_id):
     """
-    Returns detailed info about a specific event.
-    Hides participants if 'is_participants_private' is True and user is not owner.
+    Event detaylarını döndürür.
+    Katılımcılar gizliyse owner dışında kimse göremez.
+    Eğer status = 'COMPLETED' ise ratingler de döner.
     """
     try:
-
-        current_user_id = None
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            try:
-                token = auth_header.split(" ", 1)[1]
-                payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-                current_user_id = payload.get("userId")
-            except:
-                pass 
+        user_id = verify_jwt()
 
         with engine.connect() as conn:
             event = conn.execute(text("""
@@ -740,6 +732,7 @@ def get_event_by_id(event_id):
                     e.created_at,
                     e.updated_at,
                     e.owner_type,
+                    e.has_register,
                     e.owner_organization_id,
                     e.owner_user_id,          -- Auth kontrolü için gerekli
                     e.is_participants_private,-- Kontrol bayrağı
@@ -756,19 +749,23 @@ def get_event_by_id(event_id):
             if not event:
                 return {"error": "Event not found"}, 404
 
+            # 👇 Sadece status'e bakıyoruz
+            is_finished = (event.status == "COMPLETED")
+
+            # ----- Katılımcı gizliliği -----
             show_participants = True
             
             if event.is_participants_private:
                 show_participants = False
                 
-                if event.owner_type == 'USER' and current_user_id == event.owner_user_id:
+                if event.owner_type == 'USER' and user_id == event.owner_user_id:
                     show_participants = True
                 
-                elif event.owner_type == 'ORGANIZATION' and current_user_id:
+                elif event.owner_type == 'ORGANIZATION' and user_id:
                     org_member = conn.execute(text("""
                         SELECT role FROM organization_members 
                         WHERE organization_id = :oid AND user_id = :uid
-                    """), {"oid": event.owner_organization_id, "uid": current_user_id}).fetchone()
+                    """), {"oid": event.owner_organization_id, "uid": user_id}).fetchone()
                     
                     if org_member and org_member.role in ['ADMIN', 'REPRESENTATIVE']:
                         show_participants = True
@@ -801,21 +798,65 @@ def get_event_by_id(event_id):
                     ORDER BY a.created_at DESC
                 """), {"org_id": event.owner_organization_id}).fetchall()
 
+            #  Eğer COMPLETED ise ratingleri çek
+            ratings_summary = None
+            if is_finished:
+                agg_row = conn.execute(text("""
+                    SELECT 
+                        AVG(rating) AS avg_rating,
+                        COUNT(*) AS rating_count
+                    FROM ratings
+                    WHERE event_id = :eid
+                """), {"eid": event_id}).fetchone()
+
+                avg_rating = float(agg_row.avg_rating) if agg_row.avg_rating is not None else None
+                rating_count = int(agg_row.rating_count) if agg_row.rating_count else 0
+
+                rating_rows = conn.execute(text("""
+                    SELECT 
+                        u.username,
+                        r.rating,
+                        r.comment
+                    FROM ratings r
+                    JOIN users u ON u.id = r.user_id
+                    WHERE r.event_id = :eid
+                    ORDER BY r.id ASC
+                """), {"eid": event_id}).fetchall()
+
+                ratings_list = [
+                    {
+                        "username": row.username,
+                        "rating": int(row.rating),
+                        "comment": row.comment
+                    }
+                    for row in rating_rows
+                ]
+
+                ratings_summary = {
+                    "average_rating": avg_rating,
+                    "rating_count": rating_count,
+                    "ratings": ratings_list
+                }
+
+        # ----- Response’u paketle -----
         event_data = dict(event._mapping)
-        
         event_data["is_participants_private"] = bool(event.is_participants_private)
-        
+
         if not show_participants:
-             event_data["participants"] = None 
-             event_data["applications"] = [] 
+            event_data["participants"] = None
+            event_data["applications"] = []
         else:
-             event_data["participants"] = [dict(p._mapping) for p in participants]
-             event_data["applications"] = [dict(a._mapping) for a in applications]
+            event_data["participants"] = [dict(p._mapping) for p in participants]
+            event_data["applications"] = [dict(a._mapping) for a in applications]
+
+        # SADECE COMPLETED ise rating var, değilse null
+        event_data["ratings"] = ratings_summary if is_finished else None
 
         return jsonify(event_data)
 
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 @app.get("/events/filter")
 def filter_events():
@@ -1032,7 +1073,7 @@ def create_event():
         user_id = verify_jwt()
 
         data = request.get_json()
-        required_fields = ["title", "explanation", "type_id", "starts_at", "ends_at", "owner_type"]
+        required_fields = ["title", "explanation", "type_id", "starts_at", "ends_at", "owner_type","has_register"]
         missing = [f for f in required_fields if f not in data]
         if missing:
             return {"error": f"Missing required fields: {', '.join(missing)}"}, 400
@@ -1052,7 +1093,7 @@ def create_event():
             query = text("""
                 INSERT INTO events (
                     owner_user_id, owner_type, owner_organization_id,
-                    title, explanation, type_id, price,
+                    title, explanation, type_id, price, has_register,
                     starts_at, ends_at, location_name, photo_url,
                     status, user_limit, latitude, longitude, 
                     is_participants_private, -- YENİ SÜTUN
@@ -1060,7 +1101,7 @@ def create_event():
                 )
                 VALUES (
                     :owner_user_id, :owner_type, :owner_organization_id,
-                    :title, :explanation, :type_id, :price,
+                    :title, :explanation, :type_id, :price, :has_register,
                     :starts_at, :ends_at, :location_name, :photo_url,
                     'FUTURE', :user_limit, :latitude, :longitude, 
                     :is_participants_private, -- YENİ DEĞER
@@ -1076,6 +1117,7 @@ def create_event():
                 "explanation": data.get("explanation"),
                 "type_id": data.get("type_id"),
                 "price": data.get("price", 0),
+                "has_register": data.get("has_register"),
                 "starts_at": data.get("starts_at"),
                 "ends_at": data.get("ends_at"),
                 "location_name": data.get("location_name"),
@@ -1113,7 +1155,7 @@ def update_event(event_id):
             allowed_fields = {
                 "title", "explanation", "price", "starts_at", "ends_at",
                 "location_name", "photo_url", "status", "user_limit",
-                "latitude", "longitude", "type_id",
+                "latitude", "longitude", "type_id","has_register",
                 "is_participants_private" 
             }
             updates = {k: v for k, v in data.items() if k in allowed_fields}
@@ -1278,41 +1320,68 @@ def register_for_event(event_id):
     """
     Allows an authenticated user to register directly for an event
     that does not require an application.
+    - Sadece status = FUTURE olan
+    - ve allow_direct_registration = 1 olan event'ler için çalışır.
     """
     try:
         user_id = verify_jwt()
 
         with engine.connect() as conn:
-            
+            # allow_direct_registration'ı da çek
             event = conn.execute(
-                text("SELECT id, status, user_limit FROM events WHERE id = :eid"),
+                text("""
+                    SELECT id, status, user_limit, has_register
+                    FROM events
+                    WHERE id = :eid
+                """),
                 {"eid": event_id}
             ).fetchone()
             
             if not event:
                 return {"error": "Event not found"}, 404
             
+            # Event aktif mi?
             if event.status != 'FUTURE':
-                return {"error": "This event is not active or has already been completed"}, 400
+                return {
+                    "error": "This event is not active or has already been completed"
+                }, 400
 
+            # Bu event direct register'a izin veriyor mu?
+            if event.has_register:
+                return {
+                    "error": "This event does not allow direct registration. Please apply instead."
+                }, 400
+
+            # Zaten katılımcı mı?
             is_participant = conn.execute(
-                text("SELECT id FROM participants WHERE event_id = :eid AND user_id = :uid"),
+                text("""
+                    SELECT id 
+                    FROM participants 
+                    WHERE event_id = :eid AND user_id = :uid
+                """),
                 {"eid": event_id, "uid": user_id}
             ).fetchone()
             
             if is_participant:
                 return {"error": "You are already registered for this event"}, 409
             
+            # Daha önce application yapmış mı?
             has_application = conn.execute(
-                text("SELECT id FROM applications WHERE event_id = :eid AND user_id = :uid"),
+                text("""
+                    SELECT id 
+                    FROM applications 
+                    WHERE event_id = :eid AND user_id = :uid
+                """),
                 {"eid": event_id, "uid": user_id}
             ).fetchone()
 
             if has_application:
-                 return {"error": "You have a pending or processed application for this event. Cannot register directly."}, 409
+                 return {
+                     "error": "You have a pending or processed application for this event. Cannot register directly."
+                 }, 409
 
+            # Kayıt kısmı transaction içinde
             with conn.begin() as trans:
-                
                 user_limit = event.user_limit
                 
                 if user_limit is not None:
@@ -1322,8 +1391,11 @@ def register_for_event(event_id):
                     ).scalar()
                     
                     if current_participant_count >= user_limit:
-                        trans.rollback()
-                        return {"error": "Event user limit reached. Cannot register."}, 409
+                        # trans.rollback() demene gerek yok aslında,
+                        # context manager exception olmadığı için commit etmeyecek
+                        return {
+                            "error": "Event user limit reached. Cannot register."
+                        }, 409
 
                 ticket_code = str(uuid.uuid4())
                 
@@ -1338,13 +1410,14 @@ def register_for_event(event_id):
                         "ticket": ticket_code
                     }
                 )
-            
+
         return {"message": "Registration successful", "ticket_code": ticket_code}, 201
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": f"An error occurred: {str(e)}"}, 503
+
     
 # Apply to an event with application
 @app.post("/events/<int:event_id>/apply")
@@ -1950,6 +2023,181 @@ def ratings():
             result = conn.execute(text("SELECT * FROM ratings"))
             rows = [dict(r._mapping) for r in result]
         return jsonify(rows)
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+@app.post("/events/<int:event_id>/ratings")
+def rate_event(event_id):
+    """
+    Kullanıcı bir etkinliği 1-5 arası puanlar, opsiyonel yorum bırakır.
+    - Sadece etkinliğe KATILMIŞ (ATTENDED) kullanıcı puan verebilir.
+    - Daha önce rating varsa UPDATE, yoksa INSERT yapılır.
+    """
+    try:
+        user_id = verify_jwt()
+
+        data = request.get_json(silent=True) or {}
+        rating = data.get("rating")
+        comment = data.get("comment", "")
+
+        # Rating doğrulama
+        if rating is None:
+            return {"error": "rating field is required"}, 400
+
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            return {"error": "rating must be an integer between 1 and 5"}, 400
+
+        if rating < 1 or rating > 5:
+            return {"error": "rating must be between 1 and 5"}, 400
+
+        with engine.connect() as conn:
+            # 1) Kullanıcı bu etkinliğin katılımcısı mı ve ATTENDED mı?
+            participant = conn.execute(
+                text("""
+                    SELECT status 
+                    FROM participants
+                    WHERE event_id = :eid AND user_id = :uid
+                """),
+                {"eid": event_id, "uid": user_id}
+            ).fetchone()
+
+            if not participant:
+                return {"error": "You can only rate events you participated in."}, 403
+
+            if participant.status != "ATTENDED":
+                return {"error": "You can only rate events you have attended."}, 403
+
+            # 2) Daha önce rating var mı?
+            existing = conn.execute(
+                text("""
+                    SELECT id 
+                    FROM ratings
+                    WHERE event_id = :eid AND user_id = :uid
+                """),
+                {"eid": event_id, "uid": user_id}
+            ).fetchone()
+
+            if existing:
+                # UPDATE
+                conn.execute(
+                    text("""
+                        UPDATE ratings
+                        SET rating = :rating,
+                            comment = :comment
+                        WHERE event_id = :eid AND user_id = :uid
+                    """),
+                    {
+                        "rating": rating,
+                        "comment": comment,
+                        "eid": event_id,
+                        "uid": user_id
+                    }
+                )
+                conn.commit()
+                return {
+                    "message": "Rating updated successfully",
+                    "rating": rating,
+                    "comment": comment
+                }, 200
+            else:
+                # INSERT
+                conn.execute(
+                    text("""
+                        INSERT INTO ratings (event_id, user_id, rating, comment)
+                        VALUES (:eid, :uid, :rating, :comment)
+                    """),
+                    {
+                        "eid": event_id,
+                        "uid": user_id,
+                        "rating": rating,
+                        "comment": comment
+                    }
+                )
+                conn.commit()
+                return {
+                    "message": "Rating created successfully",
+                    "rating": rating,
+                    "comment": comment
+                }, 201
+
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": f"An error occurred: {str(e)}"}, 503
+
+
+@app.get("/events/<int:event_id>/ratings")
+def get_event_ratings(event_id):
+    """
+    Belirli bir etkinlik için:
+      - ortalama puan
+      - toplam rating sayısı
+      - rating listesi (kullanıcı + yorumlar)
+    döndürür.
+
+    Auth ZORUNLU (verify_jwt).
+    """
+    try:
+        # Sadece login kullanıcılar görebilsin diye
+        user_id = verify_jwt()  # şu an sadece doğrulama için, kullanmak zorunda değiliz
+
+        with engine.connect() as conn:
+            # Event var mı kontrol et
+            event = conn.execute(
+                text("SELECT id FROM events WHERE id = :eid"),
+                {"eid": event_id}
+            ).fetchone()
+
+            if not event:
+                return {"error": "Event not found"}, 404
+
+            # Ortalama ve toplam rating
+            agg_row = conn.execute(
+                text("""
+                    SELECT 
+                        AVG(rating) AS avg_rating,
+                        COUNT(*) AS rating_count
+                    FROM ratings
+                    WHERE event_id = :eid
+                """),
+                {"eid": event_id}
+            ).fetchone()
+
+            avg_rating = agg_row.avg_rating
+            rating_count = agg_row.rating_count
+
+            avg_rating = float(avg_rating) if avg_rating is not None else None
+            rating_count = int(rating_count) if rating_count is not None else 0
+
+            # Bütün rating kayıtları (username ile birlikte)
+            ratings_rows = conn.execute(
+                text("""
+                    SELECT 
+                        r.id,
+                        u.username,
+                        r.rating,
+                        r.comment
+                    FROM ratings r
+                    JOIN users u ON u.id = r.user_id
+                    WHERE r.event_id = :eid
+                    ORDER BY r.id ASC
+                """),
+                {"eid": event_id}
+            ).fetchall()
+
+        ratings = [dict(row._mapping) for row in ratings_rows]
+
+        return jsonify({
+            "event_id": event_id,
+            "average_rating": avg_rating,
+            "rating_count": rating_count,
+            "ratings": ratings
+        })
+
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
 
