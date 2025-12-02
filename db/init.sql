@@ -83,9 +83,9 @@ CREATE TABLE events (
   latitude                DECIMAL(9,6),
   longitude               DECIMAL(9,6),
   created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   is_participants_private BOOLEAN NOT NULL DEFAULT 0,
-                          ON UPDATE CURRENT_TIMESTAMP,
+                          
 
   CONSTRAINT fk_events_owner_user
     FOREIGN KEY (owner_user_id) REFERENCES users(id)
