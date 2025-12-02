@@ -83,6 +83,7 @@ CREATE TABLE events (
   longitude               DECIMAL(9,6),
   created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP
+  is_participants_private BOOLEAN NOT NULL DEFAULT 0,
                           ON UPDATE CURRENT_TIMESTAMP,
 
   CONSTRAINT fk_events_owner_user
