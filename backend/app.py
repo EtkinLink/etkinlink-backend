@@ -3,9 +3,10 @@ from functools import wraps
 import os
 import re
 import uuid
+import secrets
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
-from utils.email import generate_verification_token, verify_token, send_verification_email, init_mail
 from utils.pagination import paginate_query, get_pagination_params
+from utils.mail_service import generate_verification_token, verify_token, send_verification_email, init_mail, send_password_reset_email
 from flask_mail import Mail
 
 from flask import Flask, jsonify, request
@@ -23,15 +24,38 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 # Mail nesnesini oluştur
 mail = init_mail(app)
 
-# Secret key ayarı
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-
-# Mail nesnesini oluştur
-mail = init_mail(app)
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+
+
+def normalize_email(email_str):
+    """
+        Normalizes an email address for DB storage and querying.
+        1. Ignores the part after '+'.
+        2. Removes all '.' (dot) characters from the local part.
+        3. Converts the entire address to lowercase.
+        
+        Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
+    """
+    if not email_str:
+        return email_str
+        
+    try:
+        email_str = email_str.strip()
+        local_part, domain_part = email_str.split('@', 1)
+        
+        local_part = local_part.split('+', 1)[0]
+        
+        local_part = local_part.replace('.', '')
+        local_part = local_part.lower()
+        
+        domain_part = domain_part.lower()
+        
+        return f"{local_part}@{domain_part}"
+    
+    except (ValueError, AttributeError):
+        return email_str
 
 
 
@@ -245,33 +269,7 @@ def universities():
 # Auth fonksiyonlari
 @app.post("/auth/register")
 def register():
-    def normalize_email(email_str):
-        """
-            Normalizes an email address for DB storage and querying.
-            1. Ignores the part after '+'.
-            2. Removes all '.' (dot) characters from the local part.
-            3. Converts the entire address to lowercase.
-            
-            Example: 'User.Name+Test@Example.Com' -> 'username@example.com'
-        """
-        if not email_str:
-            return email_str
-            
-        try:
-            email_str = email_str.strip()
-            local_part, domain_part = email_str.split('@', 1)
-            
-            local_part = local_part.split('+', 1)[0]
-            
-            local_part = local_part.replace('.', '')
-            local_part = local_part.lower()
-            
-            domain_part = domain_part.lower()
-            
-            return f"{local_part}@{domain_part}"
-        
-        except (ValueError, AttributeError):
-            return email_str
+
     data = request.get_json()
     email = normalize_email(data.get("email", "").strip())
     password = data.get("password", "").strip()
@@ -382,6 +380,107 @@ def verify_email(token):
 
     except Exception as e:
         return {"error": f"Verification failed: {str(e)}"}, 503
+
+
+@app.post("/auth/forgot-password")
+def forgot_password():
+    data = request.get_json()
+    email = data.get("email")
+    
+    normalized_email = normalize_email(email)
+    
+    if not normalized_email:
+        return {"error": "Email is required"}, 400
+
+    try:
+        with engine.connect() as conn:
+            user = conn.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": normalized_email}
+            ).fetchone()
+
+            if not user:
+                return {"error": "User not found"}, 404
+
+            # Token oluştur
+            token = secrets.token_urlsafe(32)
+            expires_at = datetime.utcnow() + timedelta(hours=1)
+
+            # DB Güncelle
+            conn.execute(
+                text("""
+                    UPDATE users 
+                    SET reset_password_token = :token, 
+                        reset_password_expires = :expires 
+                    WHERE email = :email
+                """),
+                {
+                    "token": token,
+                    "expires": expires_at,
+                    "email": normalized_email
+                }
+            )
+            conn.commit()
+            
+            # Mail Gönder (Pylance hatasını çözen kısım burası)
+            try:
+                send_password_reset_email(normalized_email, token)
+                return {"message": "Password reset link sent to your email."}, 200
+            except Exception as mail_error:
+                return {"error": f"Failed to send email: {str(mail_error)}"}, 500
+
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@app.post("/auth/reset-password")
+def reset_password_action():
+    data = request.get_json()
+    token = data.get("token")
+    new_password = data.get("new_password")
+
+    if not token or not new_password:
+        return {"error": "Token and new password are required"}, 400
+    
+    if len(new_password) < 6:
+        return {"error": "Password must be at least 6 characters"}, 400
+
+    try:
+        with engine.connect() as conn:
+            user = conn.execute(
+                text("""
+                    SELECT id 
+                    FROM users 
+                    WHERE reset_password_token = :token 
+                      AND reset_password_expires > NOW()
+                """),
+                {"token": token}
+            ).fetchone()
+
+            if not user:
+                return {"error": "Invalid or expired token"}, 400
+
+            new_hash = generate_password_hash(new_password)
+
+            conn.execute(
+                text("""
+                    UPDATE users 
+                    SET password_hash = :p_hash,
+                        reset_password_token = NULL,
+                        reset_password_expires = NULL
+                    WHERE id = :uid
+                """),
+                {
+                    "p_hash": new_hash,
+                    "uid": user.id
+                }
+            )
+            conn.commit()
+
+            return {"message": "Password has been reset successfully."}, 200
+
+    except Exception as e:
+        return {"error": str(e)}, 503
 
 
 @app.post("/auth/login")
@@ -609,9 +708,21 @@ def get_events():
 @app.get("/events/<int:event_id>")
 def get_event_by_id(event_id):
     """
-    Returns detailed info about a specific event, including participants and applications.
+    Returns detailed info about a specific event.
+    Hides participants if 'is_participants_private' is True and user is not owner.
     """
     try:
+
+        current_user_id = None
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            try:
+                token = auth_header.split(" ", 1)[1]
+                payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+                current_user_id = payload.get("userId")
+            except:
+                pass 
+
         with engine.connect() as conn:
             event = conn.execute(text("""
                 SELECT 
@@ -630,6 +741,8 @@ def get_event_by_id(event_id):
                     e.updated_at,
                     e.owner_type,
                     e.owner_organization_id,
+                    e.owner_user_id,          -- Auth kontrolü için gerekli
+                    e.is_participants_private,-- Kontrol bayrağı
                     u.username AS owner_username,
                     o.name AS owner_organization_name,
                     et.code AS event_type
@@ -643,19 +756,37 @@ def get_event_by_id(event_id):
             if not event:
                 return {"error": "Event not found"}, 404
 
-            participants = conn.execute(text("""
-                SELECT 
-                    u.id,
-                    u.username,
-                    p.status
-                FROM participants p
-                JOIN users u ON u.id = p.user_id
-                WHERE p.event_id = :id
-            """), {"id": event_id}).fetchall()
+            show_participants = True
+            
+            if event.is_participants_private:
+                show_participants = False
+                
+                if event.owner_type == 'USER' and current_user_id == event.owner_user_id:
+                    show_participants = True
+                
+                elif event.owner_type == 'ORGANIZATION' and current_user_id:
+                    org_member = conn.execute(text("""
+                        SELECT role FROM organization_members 
+                        WHERE organization_id = :oid AND user_id = :uid
+                    """), {"oid": event.owner_organization_id, "uid": current_user_id}).fetchone()
+                    
+                    if org_member and org_member.role in ['ADMIN', 'REPRESENTATIVE']:
+                        show_participants = True
 
-            # Include applications if event belongs to an organization
+            participants = []
+            if show_participants:
+                participants = conn.execute(text("""
+                    SELECT 
+                        u.id,
+                        u.username,
+                        p.status
+                    FROM participants p
+                    JOIN users u ON u.id = p.user_id
+                    WHERE p.event_id = :id
+                """), {"id": event_id}).fetchall()
+
             applications = []
-            if event.owner_type == "ORGANIZATION" and event.owner_organization_id:
+            if show_participants and event.owner_type == "ORGANIZATION" and event.owner_organization_id:
                 applications = conn.execute(text("""
                     SELECT 
                         a.id,
@@ -671,19 +802,25 @@ def get_event_by_id(event_id):
                 """), {"org_id": event.owner_organization_id}).fetchall()
 
         event_data = dict(event._mapping)
-        event_data["participants"] = [dict(p._mapping) for p in participants]
-        event_data["applications"] = [dict(a._mapping) for a in applications]
+        
+        event_data["is_participants_private"] = bool(event.is_participants_private)
+        
+        if not show_participants:
+             event_data["participants"] = None 
+             event_data["applications"] = [] 
+        else:
+             event_data["participants"] = [dict(p._mapping) for p in participants]
+             event_data["applications"] = [dict(a._mapping) for a in applications]
 
         return jsonify(event_data)
 
     except Exception as e:
         return {"error": str(e)}, 503
 
-
 @app.get("/events/filter")
 def filter_events():
     """
-    Filters events by type, date range, university, and search query.
+    Filters events by type, date range, university, organization, search query AND PRICE.
     Works for both user and organization events.
     Supports pagination with ?page=1&per_page=20 parameters.
     """
@@ -694,6 +831,9 @@ def filter_events():
         search = request.args.get("q")
         university = request.args.get("university")  # can be name or id
         organization = request.args.get("organization")
+        
+        min_price = request.args.get("min_price")
+        max_price = request.args.get("max_price")
 
         filters = []
         params = {}
@@ -722,9 +862,8 @@ def filter_events():
             )""")
             params["search"] = f"%{search}%"
 
-        # --- NEW: University filter ---
+        # --- University filter ---
         if university:
-            # Try numeric first (ID), else match by name
             if university.isdigit():
                 filters.append("un.id = :university_id")
                 params["university_id"] = int(university)
@@ -732,14 +871,23 @@ def filter_events():
                 filters.append("LOWER(un.name) LIKE LOWER(:university_name)")
                 params["university_name"] = f"%{university}%"
 
+        # --- Organization filter ---
         if organization:
-            # ID or name filter for organizations
             if organization.isdigit():
                 filters.append("o.id = :organization_id")
                 params["organization_id"] = int(organization)
             else:
                 filters.append("LOWER(o.name) LIKE LOWER(:organization_name)")
                 params["organization_name"] = f"%{organization}%"
+
+        # --- Price filter ---
+        if min_price:
+            filters.append("e.price >= :min_price")
+            params["min_price"] = float(min_price)
+        
+        if max_price:
+            filters.append("e.price <= :max_price")
+            params["max_price"] = float(max_price)
 
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
 
@@ -751,6 +899,7 @@ def filter_events():
                     e.starts_at,
                     e.ends_at,
                     e.location_name,
+                    e.price,  
                     e.status,
                     e.created_at,
                     e.owner_type,
@@ -780,9 +929,10 @@ def filter_events():
             result = paginate_query(conn, base_query, count_query, params)
             return jsonify(result)
 
+    except ValueError:
+        return {"error": "Invalid format for price or ID fields"}, 400
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @app.get("/users/<int:user_id>/events")
 def get_user_events(user_id):
@@ -889,6 +1039,9 @@ def create_event():
 
         owner_type = data.get("owner_type", "USER").upper()
         org_id = data.get("organization_id") if owner_type == "ORGANIZATION" else None
+        
+        # get privacy settings -> default False/Public
+        is_participants_private = data.get("is_participants_private", False)
 
         # If organization, check if user is admin/member of it
         if owner_type == "ORGANIZATION":
@@ -901,13 +1054,17 @@ def create_event():
                     owner_user_id, owner_type, owner_organization_id,
                     title, explanation, type_id, price,
                     starts_at, ends_at, location_name, photo_url,
-                    status, user_limit, latitude, longitude, created_at, updated_at
+                    status, user_limit, latitude, longitude, 
+                    is_participants_private, -- YENİ SÜTUN
+                    created_at, updated_at
                 )
                 VALUES (
                     :owner_user_id, :owner_type, :owner_organization_id,
                     :title, :explanation, :type_id, :price,
                     :starts_at, :ends_at, :location_name, :photo_url,
-                    'FUTURE', :user_limit, :latitude, :longitude, NOW(), NOW()
+                    'FUTURE', :user_limit, :latitude, :longitude, 
+                    :is_participants_private, -- YENİ DEĞER
+                    NOW(), NOW()
                 )
             """)
 
@@ -926,6 +1083,7 @@ def create_event():
                 "user_limit": data.get("user_limit"),
                 "latitude": data.get("latitude"),
                 "longitude": data.get("longitude"),
+                "is_participants_private": is_participants_private 
             })
             conn.commit()
 
@@ -935,7 +1093,6 @@ def create_event():
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @app.put("/events/<int:event_id>")
 def update_event(event_id):
@@ -956,7 +1113,8 @@ def update_event(event_id):
             allowed_fields = {
                 "title", "explanation", "price", "starts_at", "ends_at",
                 "location_name", "photo_url", "status", "user_limit",
-                "latitude", "longitude", "type_id"
+                "latitude", "longitude", "type_id",
+                "is_participants_private" 
             }
             updates = {k: v for k, v in data.items() if k in allowed_fields}
 

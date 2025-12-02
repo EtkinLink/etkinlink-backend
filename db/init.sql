@@ -27,6 +27,8 @@ CREATE TABLE users (
   role            ENUM('USER','ADMIN') NOT NULL DEFAULT 'USER',
   status          INTEGER NOT NULL DEFAULT 0,
   university_id   BIGINT UNSIGNED,
+  reset_password_expires DATETIME NULL,
+  reset_password_token   VARCHAR(100) NULL,
 
 
   CONSTRAINT fk_users_university
@@ -81,6 +83,7 @@ CREATE TABLE events (
   longitude               DECIMAL(9,6),
   created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP
+  is_participants_private BOOLEAN NOT NULL DEFAULT 0,
                           ON UPDATE CURRENT_TIMESTAMP,
 
   CONSTRAINT fk_events_owner_user
