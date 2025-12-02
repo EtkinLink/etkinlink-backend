@@ -71,7 +71,8 @@ CREATE TABLE events (
   owner_organization_id   BIGINT UNSIGNED NULL,
   title                   VARCHAR(200) NOT NULL,
   explanation             TEXT NOT NULL,
-  type_id                 BIGINT UNSIGNED,               
+  type_id                 BIGINT UNSIGNED,
+  has_register            BOOLEAN NOT NULL DEFAULT 1,               
   price                   DECIMAL(10,2) NOT NULL,
   starts_at               DATETIME NOT NULL,
   ends_at                 DATETIME,
@@ -82,7 +83,7 @@ CREATE TABLE events (
   latitude                DECIMAL(9,6),
   longitude               DECIMAL(9,6),
   created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP
+  updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
   is_participants_private BOOLEAN NOT NULL DEFAULT 0,
                           ON UPDATE CURRENT_TIMESTAMP,
 
