@@ -12,7 +12,7 @@ email_status_queue = Queue()
 def init_mail(app):
     """Mail konfigürasyonlarını yükle ve Mail nesnesini oluştur"""
     app.config.update(
-        MAIL_SERVER='smtp.gmail.com',
+        MAIL_SERVER=os.getenv("MAIL_SERVER"),
         MAIL_PORT=587,
         MAIL_USE_TLS=True,
         MAIL_USERNAME=os.getenv('MAIL_USERNAME'),
