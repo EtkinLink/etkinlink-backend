@@ -1,7 +1,7 @@
 services:
   api:
     build: ./backend
-    env_file: ./backend/.env.dev
+    env_file: ./.env.dev
     ports:
       - "8000:8000"
     depends_on:

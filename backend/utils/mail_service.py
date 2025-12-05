@@ -11,14 +11,7 @@ email_status_queue = Queue()
 
 def init_mail(app):
     """Mail konfigürasyonlarını yükle ve Mail nesnesini oluştur"""
-    app.config.update(
-        MAIL_SERVER='smtp.gmail.com',
-        MAIL_PORT=587,
-        MAIL_USE_TLS=True,
-        MAIL_USERNAME=os.getenv('MAIL_USERNAME'),
-        MAIL_PASSWORD=os.getenv('MAIL_PASSWORD'),
-        MAIL_DEFAULT_SENDER=os.getenv('MAIL_DEFAULT_SENDER')
-    )
+    # Config zaten app.config'de yüklü olmalı
     return Mail(app)
 
 def send_async_email(app, msg, queue):
@@ -94,8 +87,8 @@ def send_password_reset_email(to_email, reset_token):
     Backend'de oluşturulan 'secrets' token'ını kullanır.
     FRONTEND_URL ortam değişkenini kullanır, yoksa localhost'a düşer.
     """
-    # Production env variable -> FRONTEND_URL=https://etkinlink.com gibi
-    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+    # Get FRONTEND_URL from app config
+    frontend_url = current_app.config.get('FRONTEND_URL', 'http://localhost:3000')
     reset_url = f"{frontend_url}/reset-password?token={reset_token}"
     
     subject = "EtkinLink - Şifre Sıfırlama Talebi"
