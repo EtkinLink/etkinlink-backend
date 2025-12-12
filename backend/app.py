@@ -4,10 +4,14 @@ import os
 import re
 import uuid
 import secrets
-from backend.utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
-from backend.utils.pagination import paginate_query, get_pagination_params
-from backend.utils.mail_service import generate_verification_token, verify_token, send_verification_email, init_mail, send_password_reset_email
-from flask_mail import Mail
+from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
+from utils.pagination import paginate_query, get_pagination_params
+from backend.utils.mail_service import (
+    generate_verification_token,
+    verify_token,
+    send_verification_email,
+    send_password_reset_email
+)
 from config import get_config
 
 from flask import Flask, jsonify, request
@@ -28,7 +32,10 @@ config = get_config()
 app.config.from_object(config)
 
 # Mail nesnesini oluştur
-mail = init_mail(app)
+app.config["MAILTRAP_API_TOKEN"] = os.getenv("MAILTRAP_API_TOKEN")
+app.config["MAIL_FROM_EMAIL"] = os.getenv("MAIL_FROM_EMAIL")
+app.config["MAIL_FROM_NAME"] = os.getenv("MAIL_FROM_NAME")
+
 
 # Database engine
 DATABASE_URL = app.config['DATABASE_URL']
