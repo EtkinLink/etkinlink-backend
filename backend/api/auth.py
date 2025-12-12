@@ -4,7 +4,7 @@ import secrets
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import text
 from datetime import datetime, timedelta
-from backend.utils.mail_service import generate_verification_token, verify_token, send_verification_email, send_password_reset_email
+from utils.mail_service import generate_verification_token, verify_token, send_verification_email, send_password_reset_email
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
