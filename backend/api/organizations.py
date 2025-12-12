@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import text
-from backend.utils.auth_utils import verify_jwt, check_organization_permission, check_organization_ownership, AuthError
-from backend.utils.pagination import paginate_query
+from utils.auth_utils import verify_jwt, check_organization_permission, check_organization_ownership, AuthError
+from utils.pagination import paginate_query
+from utils.notification_service import notify_org_approved, notify_org_rejected
 from datetime import datetime
 import jwt
 
@@ -13,7 +14,7 @@ def get_organization_by_id(org_id):
     try:
         with current_app.engine.connect() as conn:
             org = conn.execute(text("""
-                SELECT 
+                SELECT
                     o.id,
                     o.name,
                     o.description,
@@ -31,7 +32,7 @@ def get_organization_by_id(org_id):
                 return {"error": "Organization not found"}, 404
 
             members = conn.execute(text("""
-                SELECT 
+                SELECT
                     u.id,
                     u.username,
                     m.role,
@@ -42,7 +43,7 @@ def get_organization_by_id(org_id):
             """), {"id": org_id}).fetchall()
 
             events = conn.execute(text("""
-                SELECT 
+                SELECT
                     e.id,
                     e.title,
                     e.starts_at,
@@ -161,6 +162,12 @@ def approve_organization_application(org_id, app_id):
 
             applicant_id = app_row.user_id
 
+            # Get organization name for notification
+            org = conn.execute(text("""
+                SELECT name FROM organizations WHERE id = :oid
+            """), {"oid": org_id}).fetchone()
+            org_name = org.name if org else "Organization"
+
             # Approve and move to members
             conn.execute(text("""
                 UPDATE organization_applications SET status = 'APPROVED' WHERE id = :app_id
@@ -169,6 +176,10 @@ def approve_organization_application(org_id, app_id):
                 INSERT INTO organization_members (organization_id, user_id, role, joined_at)
                 VALUES (:oid, :uid, 'MEMBER', NOW())
             """), {"oid": org_id, "uid": applicant_id})
+
+            # Send notification
+            notify_org_approved(conn, applicant_id, org_name, org_id)
+
             conn.commit()
 
         return {"message": "Application approved and member added"}
@@ -197,10 +208,22 @@ def reject_organization_application(org_id, app_id):
             if not app_row:
                 return {"error": "Application not found or already processed"}, 404
 
+            applicant_id = app_row.user_id
+
+            # Get organization name for notification
+            org = conn.execute(text("""
+                SELECT name FROM organizations WHERE id = :oid
+            """), {"oid": org_id}).fetchone()
+            org_name = org.name if org else "Organization"
+
             # Reject the application
             conn.execute(text("""
                 UPDATE organization_applications SET status = 'REJECTED' WHERE id = :app_id
             """), {"app_id": app_id})
+
+            # Send notification
+            notify_org_rejected(conn, applicant_id, org_name, org_id)
+
             conn.commit()
 
         return {"message": "Application rejected successfully"}
@@ -242,7 +265,7 @@ def update_organization(org_id):
             conn.commit()
 
         return {"message": "Organization updated successfully"}
-    
+
     except AuthError as e:
         return {"error": e.args[0]}, e.code
     except Exception as e:
@@ -284,7 +307,7 @@ def get_organization_applications(org_id):
             check_organization_permission(conn, org_id, user_id, ["ADMIN", "REPRESENTATIVE"])
 
             base_query = """
-                SELECT 
+                SELECT
                     a.id,
                     a.user_id,
                     u.username,
@@ -296,17 +319,17 @@ def get_organization_applications(org_id):
                 WHERE a.organization_id = :oid
                 ORDER BY a.created_at DESC
             """
-            
+
             count_query = """
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM organization_applications a
                 WHERE a.organization_id = :oid
             """
-            
+
             params = {"oid": org_id}
             result = paginate_query(conn, base_query, count_query, params)
             return jsonify(result)
-    
+
     except AuthError as e:
         return {"error": e.args[0]}, e.code
     except Exception as e:
@@ -322,7 +345,7 @@ def get_organizations():
     try:
         with current_app.engine.connect() as conn:
             base_query = """
-                SELECT 
+                SELECT
                     o.id,
                     o.name,
                     o.description,
@@ -339,16 +362,16 @@ def get_organizations():
                 WHERE o.status = 'ACTIVE'
                 ORDER BY o.name ASC
             """
-            
+
             count_query = """
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM organizations o
                 WHERE o.status = 'ACTIVE'
             """
-            
+
             result = paginate_query(conn, base_query, count_query)
             return jsonify(result)
-            
+
     except Exception as e:
         return {"error": str(e)}, 503
 
