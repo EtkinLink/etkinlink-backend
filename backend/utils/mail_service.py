@@ -1,104 +1,162 @@
-from flask import current_app, url_for, render_template
-from flask_mail import Message, Mail
-from threading import Thread
+# utils/mail_service.py
+
+import requests
 from datetime import datetime, timedelta
-import os
-from queue import Queue
+from flask import current_app, url_for, render_template
 import jwt
 
-# Email sonuçlarını tutmak için global queue
-email_status_queue = Queue()
+# Mailtrap REST API endpoint
+MAILTRAP_SEND_URL = "https://send.api.mailtrap.io/api/send"
 
-def init_mail(app):
-    """Mail konfigürasyonlarını yükle ve Mail nesnesini oluştur"""
-    # Config zaten app.config'de yüklü olmalı
-    return Mail(app)
 
-def send_async_email(app, msg, queue):
-    """Asenkron email gönderimi ve sonucu queue'ya ekle"""
-    try:
-        with app.app_context():
-            mail = Mail(app)
-            mail.send(msg)
-            queue.put({"success": True, "message": "Email sent successfully"})
-    except Exception as e:
-        queue.put({"success": False, "message": str(e)})
+# -------------------------------------------------------------------
+# Core email sender (Mailtrap REST API)
+# -------------------------------------------------------------------
+def send_email(to_email: str, subject: str, html_body: str):
+    """
+    Sends an email via Mailtrap REST API.
+    Uses domain-based FROM address (no-reply@etkinlink.website).
+    """
 
-def send_confirmation_email(user_email, subject, html_body):
-    """Email gönder ve sonucu kontrol et"""
-    msg = Message(subject,
-                 recipients=[user_email],
-                 html=html_body)
-    
-    # Email gönderimi için yeni thread başlat
-    thread = Thread(
-        target=send_async_email,
-        args=(current_app._get_current_object(), msg, email_status_queue)
+    token = current_app.config.get("MAILTRAP_API_TOKEN")
+    from_email = current_app.config.get("MAIL_FROM_EMAIL")
+    from_name = current_app.config.get("MAIL_FROM_NAME", "EtkinLink")
+
+    if not token:
+        raise RuntimeError("MAILTRAP_API_TOKEN is not configured")
+
+    if not from_email:
+        raise RuntimeError("MAIL_FROM_EMAIL is not configured")
+
+    payload = {
+        "from": {
+            "email": from_email,
+            "name": from_name
+        },
+        "to": [
+            {"email": to_email}
+        ],
+        "subject": subject,
+        "html": html_body
+    }
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(
+        MAILTRAP_SEND_URL,
+        json=payload,
+        headers=headers,
+        timeout=10
     )
-    thread.start()
-    
-    # Maksimum 5 saniye bekle
-    try:
-        result = email_status_queue.get(timeout=5)
-        if not result["success"]:
-            raise Exception(f"Email sending failed: {result['message']}")
-        return True
-    except Exception as e:
-        raise Exception(f"Email sending failed: {str(e)}")
 
-def generate_verification_token(payload):
-    """Kullanıcı bilgileri için verification token oluşturur"""
-    payload['exp'] = datetime.utcnow() + timedelta(minutes=30)
-    token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+    if not response.ok:
+        raise RuntimeError(
+            f"Mailtrap send failed ({response.status_code}): {response.text}"
+        )
+
+    return True
+
+
+# -------------------------------------------------------------------
+# Verification token helpers
+# -------------------------------------------------------------------
+def generate_verification_token(payload: dict, expires_minutes: int = 30):
+    """
+    Generates a JWT verification token with expiration.
+    """
+
+    payload = payload.copy()
+    payload["exp"] = datetime.utcnow() + timedelta(minutes=expires_minutes)
+
+    token = jwt.encode(
+        payload,
+        current_app.config["SECRET_KEY"],
+        algorithm="HS256"
+    )
+
     return token
 
-def verify_token(token):
-    """Token'ı doğrula ve payload'ı döndür"""
+
+def verify_token(token: str):
+    """
+    Verifies JWT verification token and returns payload or None.
+    """
+
     try:
-        payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+        payload = jwt.decode(
+            token,
+            current_app.config["SECRET_KEY"],
+            algorithms=["HS256"]
+        )
         return payload
+
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:
         return None
 
-def send_verification_email(email, token, device_info=None, location_info=None):
-    """Verification emaili gönder ve sonucu kontrol et"""
-    try:
-        verification_url = url_for('verify_email', token=token, _external=True)
-        subject = "EtkinLink - Email Doğrulama"
-        
-        device_info = device_info or "-"
-        location_info = location_info or "-"
-        
-        html_body = render_template('verification_email.html',
-                                  verification_url=verification_url,
-                                  device_info=device_info,
-                                  location_info=location_info,
-                                  timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
-        
-        return send_confirmation_email(email, subject, html_body)
-    except Exception as e:
-        raise Exception(f"Verification email failed: {str(e)}")
 
-def send_password_reset_email(to_email, reset_token):
+# -------------------------------------------------------------------
+# Business emails
+# -------------------------------------------------------------------
+def send_verification_email(
+    email: str,
+    token: str,
+    device_info: str | None = None,
+    location_info: str | None = None
+):
     """
-    Şifre sıfırlama maili gönderir.
-    Backend'de oluşturulan 'secrets' token'ını kullanır.
-    FRONTEND_URL ortam değişkenini kullanır, yoksa localhost'a düşer.
+    Sends email verification mail.
     """
-    # Get FRONTEND_URL from app config
-    frontend_url = current_app.config.get('FRONTEND_URL', 'http://localhost:3000')
+
+    verification_url = url_for(
+        "verify_email",
+        token=token,
+        _external=True
+    )
+
+    html_body = render_template(
+        "verification_email.html",
+        verification_url=verification_url,
+        device_info=device_info or "-",
+        location_info=location_info or "-",
+        timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    )
+
+    return send_email(
+        to_email=email,
+        subject="EtkinLink - Email Doğrulama",
+        html_body=html_body
+    )
+
+
+def send_password_reset_email(to_email: str, reset_token: str):
+    """
+    Sends password reset email.
+    FRONTEND_URL is taken from app config.
+    """
+
+    frontend_url = current_app.config.get(
+        "FRONTEND_URL",
+        "http://localhost:3000"
+    )
+
     reset_url = f"{frontend_url}/reset-password?token={reset_token}"
-    
-    subject = "EtkinLink - Şifre Sıfırlama Talebi"
-    
+
     html_body = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px;">
         <h2>Şifrenizi mi unuttunuz?</h2>
         <p>Hesabınız için bir şifre sıfırlama talebi aldık.</p>
         <p>Şifrenizi yenilemek için aşağıdaki butona tıklayın:</p>
-        <a href="{reset_url}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+        <a href="{reset_url}"
+           style="background-color: #4CAF50;
+                  color: white;
+                  padding: 10px 20px;
+                  text-decoration: none;
+                  border-radius: 5px;">
             Şifremi Sıfırla
         </a>
         <p>veya şu linki tarayıcınıza yapıştırın:</p>
@@ -106,5 +164,9 @@ def send_password_reset_email(to_email, reset_token):
         <p>Link 1 saat boyunca geçerlidir.</p>
     </div>
     """
-    
-    return send_confirmation_email(to_email, subject, html_body)
+
+    return send_email(
+        to_email=to_email,
+        subject="EtkinLink - Şifre Sıfırlama Talebi",
+        html_body=html_body
+    )
