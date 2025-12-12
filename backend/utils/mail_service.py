@@ -112,11 +112,12 @@ def send_verification_email(
     Sends email verification mail.
     """
 
-    verification_url = url_for(
-        "verify_email",
-        token=token,
-        _external=True
-    )
+    base_url = current_app.config.get("BACKEND_BASE_URL")
+
+    if not base_url:
+        raise RuntimeError("BACKEND_BASE_URL is not configured")
+
+    verification_url = f"{base_url}/auth/register/verify/{token}"
 
     html_body = render_template(
         "verification_email.html",
@@ -131,6 +132,7 @@ def send_verification_email(
         subject="EtkinLink - Email Doğrulama",
         html_body=html_body
     )
+
 
 
 def send_password_reset_email(to_email: str, reset_token: str):
