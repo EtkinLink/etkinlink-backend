@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import text
-from utils.auth_utils import verify_jwt, check_organization_permission, check_organization_ownership, AuthError
-from utils.pagination import paginate_query
+from backend.utils.auth_utils import verify_jwt, check_organization_permission, check_organization_ownership, AuthError
+from backend.utils.pagination import paginate_query
 from datetime import datetime
 import jwt
 

@@ -4,23 +4,22 @@ import os
 import re
 import uuid
 import secrets
-from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
-from utils.pagination import paginate_query, get_pagination_params
-from utils.mail_service import (
+from backend.utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
+from backend.utils.pagination import paginate_query, get_pagination_params
+from backend.utils.mail_service import (
     generate_verification_token,
     verify_token,
     send_verification_email,
     send_password_reset_email
 )
-from config import get_config
+from backend.config import get_config
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Blueprint
 from flask_cors import CORS
 import jwt
 import pkgutil
 import importlib
-import api
-from flask import Blueprint
+import backend.api as api
 from sqlalchemy import create_engine, text
 
 # Initialize Flask app

@@ -3,8 +3,8 @@
 
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import text
-from utils.auth_utils import verify_jwt, check_event_ownership, check_organization_permission, AuthError
-from utils.pagination import paginate_query
+from backend.utils.auth_utils import verify_jwt, check_event_ownership, check_organization_permission, AuthError
+from backend.utils.pagination import paginate_query
 from datetime import datetime
 import uuid
 
@@ -281,12 +281,11 @@ def get_event_applications(event_id):
                     u.username,
                     u.name AS user_name,
                     a.why_me,
-                    a.status,
-                    a.created_at
+                    a.status
                 FROM applications a
                 JOIN users u ON a.user_id = u.id
                 WHERE a.event_id = :eid
-                ORDER BY a.status ASC, a.created_at DESC
+                ORDER BY a.status ASC, a.id DESC
             """
             
             count_query = """
@@ -1015,6 +1014,105 @@ def delete_event(event_id):
 
         return {"message": "Event deleted successfully"}
 
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@events_bp.post("/<int:event_id>/report")
+def report_event(event_id):
+    """
+    Report an event for inappropriate content.
+    Body: {"reason": "This event contains spam"}
+    """
+    try:
+        user_id = verify_jwt()
+        data = request.get_json()
+        reason = data.get("reason", "").strip()
+        
+        if not reason:
+            return {"error": "Reason is required"}, 400
+        
+        if len(reason) < 10:
+            return {"error": "Reason must be at least 10 characters"}, 400
+        
+        with current_app.engine.connect() as conn:
+            # Check if event exists
+            event = conn.execute(
+                text("SELECT id FROM events WHERE id = :id"),
+                {"id": event_id}
+            ).fetchone()
+            
+            if not event:
+                return {"error": "Event not found"}, 404
+            
+            # Check if user already reported this event
+            existing = conn.execute(
+                text("""
+                    SELECT id FROM reports 
+                    WHERE event_id = :eid AND reporter_user_id = :uid
+                """),
+                {"eid": event_id, "uid": user_id}
+            ).fetchone()
+            
+            if existing:
+                return {"error": "You have already reported this event"}, 409
+            
+            # Create report
+            conn.execute(
+                text("""
+                    INSERT INTO reports (event_id, reporter_user_id, reason, status, created_at)
+                    VALUES (:eid, :uid, :reason, 'PENDING', NOW())
+                """),
+                {"eid": event_id, "uid": user_id, "reason": reason}
+            )
+            conn.commit()
+        
+        return {"message": "Report submitted successfully"}, 201
+    
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@events_bp.get("/my-reports")
+def get_my_reports():
+    """
+    Get current user's reports.
+    Query params: ?page=1&per_page=20
+    """
+    try:
+        user_id = verify_jwt()
+        
+        with current_app.engine.connect() as conn:
+            base_query = """
+                SELECT 
+                    r.id,
+                    r.event_id,
+                    e.title as event_title,
+                    r.reason,
+                    r.status,
+                    r.admin_notes,
+                    r.created_at,
+                    r.updated_at
+                FROM reports r
+                JOIN events e ON r.event_id = e.id
+                WHERE r.reporter_user_id = :uid
+                ORDER BY r.created_at DESC
+            """
+            
+            count_query = """
+                SELECT COUNT(*) 
+                FROM reports 
+                WHERE reporter_user_id = :uid
+            """
+            
+            params = {"uid": user_id}
+            result = paginate_query(conn, base_query, count_query, params)
+            return jsonify(result)
+    
     except AuthError as e:
         return {"error": e.args[0]}, e.code
     except Exception as e:

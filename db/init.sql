@@ -29,6 +29,8 @@ CREATE TABLE users (
   university_id   BIGINT UNSIGNED,
   reset_password_expires DATETIME NULL,
   reset_password_token   VARCHAR(100) NULL,
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  is_blocked      BOOLEAN DEFAULT FALSE,
 
 
   CONSTRAINT fk_users_university
@@ -78,7 +80,7 @@ CREATE TABLE events (
   ends_at                 DATETIME,
   location_name           VARCHAR(500),
   photo_url               VARCHAR(500),
-  status                  ENUM('FUTURE','COMPLETED') NOT NULL DEFAULT 'FUTURE',
+  status                  ENUM('PENDING','FUTURE','COMPLETED','REJECTED') NOT NULL DEFAULT 'PENDING',
   user_limit              INT UNSIGNED,              
   latitude                DECIMAL(9,6),
   longitude               DECIMAL(9,6),
@@ -201,6 +203,27 @@ CREATE TABLE organization_applications (
     ON UPDATE CASCADE ON DELETE CASCADE,
 
   UNIQUE KEY uq_org_application (organization_id, user_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE reports (
+  id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  event_id        BIGINT UNSIGNED NOT NULL,
+  reporter_user_id BIGINT UNSIGNED NOT NULL,
+  reason          TEXT NOT NULL,
+  status          ENUM('PENDING','ACCEPTED','REJECTED') DEFAULT 'PENDING',
+  is_reviewed     BOOLEAN DEFAULT FALSE,
+  admin_notes     TEXT,
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  
+  CONSTRAINT fk_reports_event FOREIGN KEY (event_id) REFERENCES events(id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_reports_user FOREIGN KEY (reporter_user_id) REFERENCES users(id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+    
+  INDEX idx_reports_status (status),
+  INDEX idx_reports_is_reviewed (is_reviewed),
+  INDEX idx_reports_created (created_at)
 ) ENGINE=InnoDB;
 
 
@@ -618,8 +641,8 @@ INSERT INTO events (
 )
 VALUES 
   (1, 'USER', NULL, 'Tech Meetup', 'Monthly ITU tech meetup', 1, 0,
-   '2025-01-10 18:00:00', '2025-01-10 21:00:00', 'ITU Ayazağa Kampüsü, SDKM', NULL,
-   'FUTURE', 50, 41.1050, 29.0250, NOW(), NOW()),
+   '2024-12-10 18:00:00', '2024-12-10 21:00:00', 'ITU Ayazağa Kampüsü, SDKM', NULL,
+   'COMPLETED', 50, 41.1050, 29.0250, NOW(), NOW()),
 
   (2, 'USER', NULL, 'Jazz Night', 'Chill jazz music night', 2, 50,
    '2025-02-12 20:00:00', '2025-02-12 23:30:00', 'Bogazici University, Albert Long Hall', NULL,
@@ -627,11 +650,11 @@ VALUES
 
   (3, 'USER', NULL, 'Chess Tournament', 'Open Swiss chess tournament', 6, 20,
    '2025-03-05 10:00:00', '2025-03-05 18:00:00', 'METU Culture and Convention Center', NULL,
-   'FUTURE', 40, 39.9334, 32.8597, NOW(), NOW()),
+   'PENDING', 40, 39.9334, 32.8597, NOW(), NOW()),
 
   (4, 'USER', NULL, 'AI Seminar', 'Turing on machine learning', 8, 0,
-   '2025-04-01 15:00:00', '2025-04-01 17:00:00', 'University College London, Hall A', NULL,
-   'FUTURE', 200, 51.5074, -0.1278, NOW(), NOW()),
+   '2024-11-15 15:00:00', '2024-11-15 17:00:00', 'University College London, Hall A', NULL,
+   'COMPLETED', 200, 51.5074, -0.1278, NOW(), NOW()),
 
   (5, 'USER', NULL, 'Linux Workshop', 'Kernel development basics', 4, 15,
    '2025-03-22 13:00:00', '2025-03-22 16:00:00', 'Kumpula Campus, Helsinki University', NULL,
@@ -639,19 +662,19 @@ VALUES
 
   (6, 'USER', NULL, 'Startup Pitch', 'Elon hosts pitch event', 10, 0,
    '2025-02-01 19:00:00', '2025-02-01 22:00:00', 'Silicon Valley Innovation Hub', NULL,
-   'FUTURE', 500, 34.0522, -118.2437, NOW(), NOW()),
+   'PENDING', 500, 34.0522, -118.2437, NOW(), NOW()),
 
   (7, 'USER', NULL, 'Hackathon', '48-hour hackathon', 1, 0,
    '2025-05-10 09:00:00', '2025-05-12 09:00:00', 'Facebook HQ, Menlo Park', NULL,
    'FUTURE', 150, 37.4848, -122.1484, NOW(), NOW()),
 
   (8, 'USER', NULL, 'Charity Marathon', 'Run for education', 5, 25,
-   '2025-06-15 08:00:00', '2025-06-15 12:00:00', 'Seattle City Marathon Route', NULL,
-   'FUTURE', 1000, 47.6062, -122.3321, NOW(), NOW()),
+   '2024-10-15 08:00:00', '2024-10-15 12:00:00', 'Seattle City Marathon Route', NULL,
+   'COMPLETED', 1000, 47.6062, -122.3321, NOW(), NOW()),
 
   (9, 'USER', NULL, 'iOS Dev Talk', 'SwiftUI workshop', 4, 10,
    '2025-07-01 10:00:00', '2025-07-01 13:00:00', 'Apple Park Auditorium', NULL,
-   'FUTURE', 80, 37.3348, -122.0090, NOW(), NOW()),
+   'PENDING', 80, 37.3348, -122.0090, NOW(), NOW()),
 
   (10, 'USER', NULL, 'C Programming', 'Dennis explains pointers', 4, 5,
    '2025-02-20 11:00:00', '2025-02-20 13:00:00', 'New York Tech Hub', NULL,
@@ -659,11 +682,11 @@ VALUES
 
   (1, 'ORGANIZATION', 1, 'AI Bootcamp', 'Deep learning bootcamp hosted by ITU AI Club', 4, 0,
    '2025-09-10 09:00:00', '2025-09-12 18:00:00', 'ITU AI Lab', NULL,
-   'FUTURE', 100, 41.1055, 29.0258, NOW(), NOW()),
+   'PENDING', 100, 41.1055, 29.0258, NOW(), NOW()),
 
   (2, 'ORGANIZATION', 2, 'Jazz Improvisation Workshop', 'Bogazici Jazz Society presents a hands-on improvisation session', 2, 30,
-   '2025-08-15 14:00:00', '2025-08-15 18:00:00', 'Bogazici University Music Hall', NULL,
-   'FUTURE', 40, 41.0899, 29.0512, NOW(), NOW()),
+   '2024-11-20 14:00:00', '2024-11-20 18:00:00', 'Bogazici University Music Hall', NULL,
+   'COMPLETED', 40, 41.0899, 29.0512, NOW(), NOW()),
 
   (3, 'ORGANIZATION', 3, 'METU Blitz Cup', 'Chess Club monthly blitz tournament', 6, 10,
    '2025-04-05 10:00:00', '2025-04-05 14:00:00', 'METU Student Center', NULL,
@@ -671,11 +694,20 @@ VALUES
 
   (5, 'ORGANIZATION', 4, 'Startup Fair 2025', 'Koc Entrepreneurship Club startup showcase', 10, 0,
    '2025-11-05 10:00:00', '2025-11-05 17:00:00', 'Koc University Main Hall', NULL,
-   'FUTURE', 300, 41.2000, 29.0150, NOW(), NOW()),
+   'PENDING', 300, 41.2000, 29.0150, NOW(), NOW()),
 
   (10, 'ORGANIZATION', 5, 'Hack the Future', 'Hacettepe Coding Society annual hackathon', 1, 0,
    '2025-10-25 09:00:00', '2025-10-27 18:00:00', 'Hacettepe University Tech Center', NULL,
-   'FUTURE', 250, 39.9331, 32.8596, NOW(), NOW());
+   'FUTURE', 250, 39.9331, 32.8596, NOW(), NOW()),
+  
+  -- Birkaç rejected event örneği
+  (1, 'USER', NULL, 'Spam Event Test', 'This is a test spam event', 10, 0,
+   '2025-06-01 10:00:00', '2025-06-01 12:00:00', 'Test Location', NULL,
+   'REJECTED', 50, 41.1050, 29.0250, NOW(), NOW()),
+   
+  (2, 'ORGANIZATION', 2, 'Inappropriate Content Event', 'Event with policy violations', 10, 0,
+   '2025-07-01 10:00:00', '2025-07-01 12:00:00', 'Test Location', NULL,
+   'REJECTED', 30, 41.0892, 29.0501, NOW(), NOW());
 
 INSERT INTO organization_members (organization_id, user_id, role, joined_at)
 VALUES
@@ -752,3 +784,13 @@ VALUES
   (4, 2, 'Interested in startups and innovation.', 'PENDING', NOW()),
   (5, 4, 'Love coding and mentoring students.', 'APPROVED', NOW()),
   (1, 7, 'Excited about machine learning events.', 'PENDING', NOW());
+
+INSERT INTO reports (event_id, reporter_user_id, reason, status, is_reviewed, admin_notes, created_at)
+VALUES
+  (1, 3, 'Event content is inappropriate and misleading', 'PENDING', FALSE, NULL, NOW()),
+  (2, 5, 'Misleading event description, not what was advertised', 'ACCEPTED', TRUE, 'Event has been reviewed and removed', DATE_SUB(NOW(), INTERVAL 2 DAY)),
+  (3, 7, 'This looks like a spam event', 'REJECTED', TRUE, 'Event is legitimate, verified with organizers', DATE_SUB(NOW(), INTERVAL 5 DAY)),
+  (4, 2, 'Offensive language in event details', 'PENDING', FALSE, NULL, DATE_SUB(NOW(), INTERVAL 1 DAY)),
+  (5, 6, 'Duplicate event already exists', 'ACCEPTED', TRUE, 'Duplicate removed, original kept', DATE_SUB(NOW(), INTERVAL 3 DAY)),
+  (6, 4, 'Event violates community guidelines', 'PENDING', FALSE, NULL, DATE_SUB(NOW(), INTERVAL 6 HOUR)),
+  (7, 8, 'Inappropriate content for student audience', 'REJECTED', TRUE, 'Content reviewed, found appropriate', DATE_SUB(NOW(), INTERVAL 1 WEEK));

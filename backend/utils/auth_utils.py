@@ -165,3 +165,31 @@ def require_auth(f):
         except AuthError as e:
             return {"error": e.args[0]}, e.code
     return decorated_function
+
+
+def require_admin(f):
+    """
+    Decorator that requires admin role.
+    Usage: @require_admin
+    """
+    from functools import wraps
+    from flask import current_app
+    
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            user_id = verify_jwt()
+            
+            with current_app.engine.connect() as conn:
+                user = conn.execute(
+                    text("SELECT role FROM users WHERE id = :id"),
+                    {"id": user_id}
+                ).fetchone()
+                
+                if not user or user.role != 'ADMIN':
+                    raise AuthError("Admin access required", 403)
+            
+            return f(*args, **kwargs)
+        except AuthError as e:
+            return {"error": e.args[0]}, e.code
+    return decorated_function
