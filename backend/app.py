@@ -6,7 +6,7 @@ import uuid
 import secrets
 from utils.auth_utils import verify_jwt, AuthError, check_organization_permission, check_event_ownership, check_organization_ownership, require_auth
 from utils.pagination import paginate_query, get_pagination_params
-from backend.utils.mail_service import (
+from utils.mail_service import (
     generate_verification_token,
     verify_token,
     send_verification_email,
