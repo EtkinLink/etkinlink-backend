@@ -1,5 +1,5 @@
 # api/__init__.py
-# Bu dosya, 'api' klasörünü bir Python paketi olarak tanımlar ve 
+# Bu dosya, 'api' klasörünü bir Python paketi olarak tanımlar ve
 # içindeki Blueprint'leri doğrudan dışarıya açar.
 
 # .users ve .auth, bu paketin içindeki users.py ve auth.py dosyalarını ifade eder.

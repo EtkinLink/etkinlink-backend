@@ -6,13 +6,13 @@ import os
 
 class Config:
     """Base configuration class."""
-    
+
     # Secret key for JWT and Flask
     SECRET_KEY = os.getenv('SECRET_KEY')
-    
+
     # Database
     DATABASE_URL = os.getenv("DATABASE_URL")
-    
+
     # Mail settings
     MAIL_SERVER = 'smtp.gmail.com'
     MAIL_PORT = 587
@@ -20,10 +20,10 @@ class Config:
     MAIL_USERNAME = os.getenv('MAIL_USERNAME')
     MAIL_PASSWORD = os.getenv('MAIL_PASSWORD')
     MAIL_DEFAULT_SENDER = os.getenv('MAIL_DEFAULT_SENDER')
-    
+
     # Application
     PORT = int(os.getenv("PORT", 8000))
-    
+
     # Frontend URL for password reset emails
     FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 

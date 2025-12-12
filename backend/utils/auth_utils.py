@@ -49,45 +49,45 @@ def verify_jwt():
 def check_organization_permission(conn, org_id, user_id, required_roles=None):
     """
     Check if user has required role in organization.
-    
+
     Args:
         conn: Database connection
         org_id: Organization ID
         user_id: User ID
         required_roles: List of required roles (default: ["ADMIN", "REPRESENTATIVE"])
-    
+
     Returns:
         role: User's role in organization
-    
+
     Raises:
         AuthError: If user doesn't have required permissions
     """
     if required_roles is None:
         required_roles = ["ADMIN", "REPRESENTATIVE"]
-    
+
     role_row = conn.execute(text("""
         SELECT role FROM organization_members
         WHERE organization_id = :org_id AND user_id = :uid
     """), {"org_id": org_id, "uid": user_id}).fetchone()
-    
+
     if not role_row or role_row.role not in required_roles:
         raise AuthError("You are not authorized to perform this action for this organization", 403)
-    
+
     return role_row.role
 
 
 def check_event_ownership(conn, event_id, user_id):
     """
     Check if user can modify the event (owner or org admin/representative).
-    
+
     Args:
         conn: Database connection
         event_id: Event ID
         user_id: User ID
-    
+
     Returns:
         event: Event row with ownership info
-    
+
     Raises:
         AuthError: If user doesn't have permissions or event not found
     """
@@ -95,50 +95,50 @@ def check_event_ownership(conn, event_id, user_id):
         SELECT owner_user_id, owner_type, owner_organization_id
         FROM events WHERE id = :id
     """), {"id": event_id}).fetchone()
-    
+
     if not event:
         raise AuthError("Event not found", 404)
-    
+
     owner_type = event.owner_type
     org_id = event.owner_organization_id
-    
+
     # Check permission based on owner type
     if owner_type == "USER" and event.owner_user_id != user_id:
         raise AuthError("Not authorized to modify this event", 403)
-    
+
     if owner_type == "ORGANIZATION":
         check_organization_permission(conn, org_id, user_id, ["ADMIN", "REPRESENTATIVE"])
-    
+
     return event
 
 
 def check_organization_ownership(conn, org_id, user_id, allow_admin=True):
     """
     Check if user can modify the organization (owner or admin).
-    
+
     Args:
         conn: Database connection
         org_id: Organization ID
         user_id: User ID
         allow_admin: Whether to allow admin role (default: True)
-    
+
     Returns:
         org: Organization row with ownership info
-    
+
     Raises:
         AuthError: If user doesn't have permissions or organization not found
     """
     org = conn.execute(text("""
         SELECT owner_user_id FROM organizations WHERE id = :id
     """), {"id": org_id}).fetchone()
-    
+
     if not org:
         raise AuthError("Organization not found", 404)
-    
+
     # Check if user is owner
     if org.owner_user_id == user_id:
         return org
-    
+
     # Check if user is admin (if allowed)
     if allow_admin:
         try:
@@ -146,7 +146,7 @@ def check_organization_ownership(conn, org_id, user_id, allow_admin=True):
             return org
         except AuthError:
             pass
-    
+
     raise AuthError("Not authorized to modify this organization", 403)
 
 
@@ -156,12 +156,12 @@ def require_auth(f):
     Usage: @require_auth
     """
     from functools import wraps
-    
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         try:
             user_id = verify_jwt()
-            return f(user_id, *args, **kwargs)
+            return f(user_id=user_id, *args, **kwargs)
         except AuthError as e:
             return {"error": e.args[0]}, e.code
     return decorated_function
