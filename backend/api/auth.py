@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app, redirect
 import jwt
 import secrets
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -159,8 +159,12 @@ def verify_email(token):
             )
             conn.commit()
 
-            return {"message": "Account verified successfully"}, 200
+            frontend_url = current_app.config.get("FRONTEND_BASE_URL")
 
+            return redirect(
+                f"{frontend_url}/auth/register/verify/{token}",
+                 code=302
+            )
     except Exception as e:
         return {"error": f"Verification failed: {str(e)}"}, 503
 

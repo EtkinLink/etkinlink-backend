@@ -35,6 +35,11 @@ app.config["MAILTRAP_API_TOKEN"] = os.getenv("MAILTRAP_API_TOKEN")
 app.config["MAIL_FROM_EMAIL"] = os.getenv("MAIL_FROM_EMAIL")
 app.config["MAIL_FROM_NAME"] = os.getenv("MAIL_FROM_NAME")
 
+# Backend base url
+app.config["BACKEND_BASE_URL"] = os.getenv("BACKEND_BASE_URL")
+
+#Frontend base url
+app.config["FRONTEND_BASE_URL"] = os.getenv("FRONTEND_BASE_URL")
 
 # Database engine
 DATABASE_URL = app.config['DATABASE_URL']
