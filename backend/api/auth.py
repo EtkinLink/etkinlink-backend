@@ -47,6 +47,11 @@ def register():
     email = normalize_email(data.get("email", "").strip())
     password = data.get("password", "").strip()
     name = data.get("name", "").strip()
+    gender = (data.get("gender","")).strip()
+
+    allowed = {"MALE", "FEMALE"}
+    if gender not in allowed:
+        return {"error": "Invalid gender. Allowed: MALE, FEMALE"}, 400
     
     # Get device and location info from request headers
     device_info = request.headers.get('User-Agent')
@@ -95,6 +100,7 @@ def register():
                 "name": name,
                 "username": email.split('@')[0],
                 "university_id": university_id,
+                "gender": gender,
                 "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             }
 
@@ -135,18 +141,20 @@ def verify_email(token):
             if existing_user:
                 return {"error": "Email already registered"}, 400
 
-            # Kullanıcıyı kaydet
-            result = conn.execute(
+            gender = (payload.get("gender")).strip()
+
+            conn.execute(
                 text("""
-                    INSERT INTO users (email, password_hash, name, username, university_id) 
-                    VALUES (:email, :password, :name, :username, :university_id)
+                    INSERT INTO users (email, password_hash, name, username, university_id, gender) 
+                    VALUES (:email, :password, :name, :username, :university_id, :gender)
                 """),
                 {
                     "email": payload["email"],
                     "password": payload["password"],
                     "name": payload["name"],
                     "username": payload["username"],
-                    "university_id": payload["university_id"]
+                    "university_id": payload["university_id"],
+                    "gender": gender
                 }
             )
             conn.commit()
@@ -320,6 +328,7 @@ def get_current_user():
                         u.name,
                         u.email,
                         u.role,
+                        u.gender,
                         u.university_id,
                         u.photo_url,
                         u.created_at,

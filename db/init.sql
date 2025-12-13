@@ -31,6 +31,7 @@ CREATE TABLE users (
   reset_password_token   VARCHAR(100) NULL,
   created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
   is_blocked      BOOLEAN DEFAULT FALSE,
+  gender          ENUM('MALE','FEMALE') NOT NULL,
 
 
   CONSTRAINT fk_users_university
@@ -87,6 +88,7 @@ CREATE TABLE events (
   created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   is_participants_private BOOLEAN NOT NULL DEFAULT 0,
+  only_girls              BOOLEAN NOT NULL DEFAULT 0,
                           
 
   CONSTRAINT fk_events_owner_user

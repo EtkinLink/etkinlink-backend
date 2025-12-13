@@ -339,7 +339,6 @@ def get_user_events(user_id):
         pagination_params = get_pagination_params()
         
         with engine.connect() as conn:
-            # Combined query for both participant events and applied org events
             base_query = """
                 (
                     SELECT 
@@ -387,6 +386,27 @@ def get_user_events(user_id):
                         SELECT p.event_id FROM participants p WHERE p.user_id = :uid
                     )
                 )
+                UNION
+                (
+                    SELECT
+                        e.id,
+                        e.title,
+                        e.starts_at,
+                        e.ends_at,
+                        e.location_name,
+                        e.status,
+                        e.created_at,
+                        e.owner_type,
+                        et.code AS event_type,
+                        'OWNER' AS participation_status,
+                        o.name AS owner_organization_name,
+                        u.username AS owner_username
+                    FROM events e
+                    LEFT JOIN event_types et ON e.type_id = et.id
+                    LEFT JOIN organizations o ON e.owner_organization_id = o.id
+                    LEFT JOIN users u ON e.owner_user_id = u.id
+                    WHERE e.owner_user_id = :uid
+                )
                 ORDER BY starts_at DESC
             """
             
@@ -406,6 +426,12 @@ def get_user_events(user_id):
                     AND e.id NOT IN (
                         SELECT p.event_id FROM participants p WHERE p.user_id = :uid
                     )
+
+                    UNION
+
+                    SELECT e.id
+                    FROM events e
+                    WHERE e.owner_user_id = :uid
                 ) AS combined_events
             """
             

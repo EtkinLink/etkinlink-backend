@@ -90,6 +90,14 @@ def create_organization():
             })
             conn.commit()
 
+            org_id_row = conn.execute(text("SELECT LAST_INSERT_ID()")).fetchone()
+            new_org_id = org_id_row[0]
+
+            conn.execute(text("""
+                INSERT INTO organization_members (organization_id, user_id, role, joined_at)
+                VALUES (:oid, :uid, 'ADMIN', NOW())
+            """), {"oid": new_org_id, "uid": user_id})
+
         return {"message": "Organization created successfully"}, 201
     
     except AuthError as e:
@@ -338,6 +346,74 @@ def get_organizations():
             result = paginate_query(conn, base_query, count_query)
             return jsonify(result)
             
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@organization_bp.get("/filter")
+def filter_organizations():
+    """
+    Filters organizations by:
+      - q: only organization name (LIKE)
+      - university: exact university id (digit guaranteed)
+
+    Supports pagination with ?page=1&per_page=20
+    """
+    try:
+        search = request.args.get("q")
+        university = request.args.get("university")  # guaranteed digit
+
+        filters = []
+        params = {}
+
+        if search:
+            filters.append("LOWER(o.name) LIKE LOWER(:search)")
+            params["search"] = f"%{search.strip()}%"
+
+        if university:
+            filters.append("uni.id = :university_id")
+            params["university_id"] = int(university)
+
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+
+        with current_app.engine.connect() as conn:
+            base_query = f"""
+                SELECT
+                    o.id,
+                    o.name,
+                    o.description,
+                    o.status,
+                    o.photo_url,
+                    o.created_at,
+                    o.updated_at,
+                    u.username AS owner_username,
+                    uni.id AS university_id,
+                    uni.name AS university_name,
+                    (
+                        SELECT COUNT(*)
+                        FROM organization_members m
+                        WHERE m.organization_id = o.id
+                    ) AS member_count
+                FROM organizations o
+                LEFT JOIN users u ON o.owner_user_id = u.id
+                LEFT JOIN universities uni ON u.university_id = uni.id
+                {where_clause}
+                ORDER BY o.name ASC
+            """
+
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM organizations o
+                LEFT JOIN users u ON o.owner_user_id = u.id
+                LEFT JOIN universities uni ON u.university_id = uni.id
+                {where_clause}
+            """
+
+            result = paginate_query(conn, base_query, count_query, params)
+            return jsonify(result)
+
+    except ValueError:
+        return {"error": "Invalid university id"}, 400
     except Exception as e:
         return {"error": str(e)}, 503
 

@@ -10,6 +10,14 @@ import uuid
 
 events_bp = Blueprint('events', __name__, url_prefix='/events')
 
+
+def get_user_gender(conn, user_id):
+    g = conn.execute(
+        text("SELECT gender FROM users WHERE id = :uid"),
+        {"uid": user_id}
+    ).scalar()
+    return (g).strip().upper()
+
 # Register directly for an event without application
 @events_bp.post("/<int:event_id>/register")
 def register_for_event(event_id):
@@ -26,7 +34,7 @@ def register_for_event(event_id):
             # allow_direct_registration'ı da çek
             event = conn.execute(
                 text("""
-                    SELECT id, status, user_limit, has_register
+                    SELECT id, status, user_limit, has_register , only_girls
                     FROM events
                     WHERE id = :eid
                 """),
@@ -41,6 +49,11 @@ def register_for_event(event_id):
                 return {
                     "error": "This event is not active or has already been completed"
                 }, 400
+            
+            if event.only_girls:
+                user_gender = get_user_gender(conn, user_id)
+                if user_gender != "FEMALE":
+                    return {"error": "This event is only available for female users."}, 403
 
             # Bu event direct register'a izin veriyor mu?
             if event.has_register:
@@ -130,7 +143,7 @@ def apply_to_event(event_id):
             
             # Güncellenen kısım: Etkinliğin durumunu (status) kontrol et
             event = conn.execute(
-                text("SELECT id, status FROM events WHERE id = :eid"),
+                text("SELECT id, status, only_girls FROM events WHERE id = :eid"),
                 {"eid": event_id}
             ).fetchone()
             
@@ -139,6 +152,11 @@ def apply_to_event(event_id):
             
             if event.status != 'FUTURE':
                 return {"error": "This event is not active or has already been completed"}, 400
+
+            if event.only_girls:
+                user_gender = get_user_gender(conn, user_id)
+                if user_gender != "FEMALE":
+                    return {"error": "This event is only available for female users."}, 403
 
             # Mevcut katılımcı kontrolü
             is_participant = conn.execute(
@@ -501,6 +519,7 @@ def create_event():
         
         # get privacy settings -> default False/Public
         is_participants_private = data.get("is_participants_private", False)
+        only_girls = bool(data.get("only_girls", False))
 
         # If organization, check if user is admin/member of it
         if owner_type == "ORGANIZATION":
@@ -514,7 +533,7 @@ def create_event():
                     title, explanation, type_id, price, has_register,
                     starts_at, ends_at, location_name, photo_url,
                     status, user_limit, latitude, longitude, 
-                    is_participants_private, -- YENİ SÜTUN
+                    is_participants_private,only_girls,
                     created_at, updated_at
                 )
                 VALUES (
@@ -522,7 +541,7 @@ def create_event():
                     :title, :explanation, :type_id, :price, :has_register,
                     :starts_at, :ends_at, :location_name, :photo_url,
                     'FUTURE', :user_limit, :latitude, :longitude, 
-                    :is_participants_private, -- YENİ DEĞER
+                    :is_participants_private,:only_girls,
                     NOW(), NOW()
                 )
             """)
@@ -543,7 +562,8 @@ def create_event():
                 "user_limit": data.get("user_limit"),
                 "latitude": data.get("latitude"),
                 "longitude": data.get("longitude"),
-                "is_participants_private": is_participants_private 
+                "is_participants_private": is_participants_private ,
+                "only_girls": only_girls
             })
             conn.commit()
 
@@ -646,6 +666,7 @@ def get_events():
                     e.longitude,
                     e.created_at,
                     e.updated_at,
+                    e.only_girls,
                     e.owner_type,
                     u.username AS owner_username,
                     o.name AS owner_organization_name,
@@ -702,6 +723,7 @@ def get_event_by_id(event_id):
                     e.owner_type,
                     e.has_register,
                     e.owner_organization_id,
+                    e.only_girls,
                     e.owner_user_id,          -- Auth kontrolü için gerekli
                     e.is_participants_private,-- Kontrol bayrağı
                     u.username AS owner_username,
@@ -809,6 +831,7 @@ def get_event_by_id(event_id):
         # ----- Response’u paketle -----
         event_data = dict(event._mapping)
         event_data["is_participants_private"] = bool(event.is_participants_private)
+        event_data["only_girls"] = bool(event.only_girls)
 
         if not show_participants:
             event_data["participants"] = None
@@ -826,7 +849,7 @@ def get_event_by_id(event_id):
         return {"error": str(e)}, 503
 
 
-@events_bp.get("//filter")
+@events_bp.get("/filter")
 def filter_events():
     """
     Filters events by type, date range, university ,organization, search query, status
@@ -842,6 +865,8 @@ def filter_events():
         university = request.args.get("university")  # can be name or id
         organization = request.args.get("organization")
         status = request.args.get("status")
+        past_events = request.args.get("past_events")
+        only_girls = request.args.get("only_girls")
         
         min_price = request.args.get("min_price")
         max_price = request.args.get("max_price")
@@ -904,6 +929,18 @@ def filter_events():
         if max_price:
             filters.append("e.price <= :max_price")
             params["max_price"] = float(max_price)
+
+        if past_events:
+            filters.append("""
+                (
+                    (e.ends_at IS NOT NULL AND e.ends_at < NOW())
+                    OR
+                    (e.ends_at IS NULL AND e.starts_at < NOW())
+                )
+            """)
+
+        if only_girls:
+            filters.append("e.only_girls = 1")
 
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
 
@@ -972,7 +1009,7 @@ def update_event(event_id):
                 "title", "explanation", "price", "starts_at", "ends_at",
                 "location_name", "photo_url", "status", "user_limit",
                 "latitude", "longitude", "type_id","has_register",
-                "is_participants_private" 
+                "is_participants_private","only_girls"
             }
             updates = {k: v for k, v in data.items() if k in allowed_fields}
 
