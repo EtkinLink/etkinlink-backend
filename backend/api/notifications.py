@@ -19,24 +19,27 @@ def get_notifications():
 
         with current_app.engine.connect() as conn:
             base_query = """
-                SELECT
+                SELECT 
                     n.id,
+                    n.user_id,
                     n.type,
                     n.title,
                     n.message,
                     n.is_read,
-                    n.created_at
+                    n.created_at,
+                    n.related_event_id,
+                    n.related_organization_id
                 FROM notifications n
                 WHERE n.user_id = :user_id
                 ORDER BY n.created_at DESC
             """
-
+            
             count_query = """
-                SELECT COUNT(*)
-                FROM notifications
+                SELECT COUNT(*) 
+                FROM notifications 
                 WHERE user_id = :user_id
             """
-
+            
             params = {"user_id": user_id}
             result = paginate_query(conn, base_query, count_query, params, pagination_params)
             return jsonify(result)
@@ -56,8 +59,8 @@ def get_unread_count():
         with current_app.engine.connect() as conn:
             count = conn.execute(
                 text("""
-                    SELECT COUNT(*)
-                    FROM notifications
+                    SELECT COUNT(*) 
+                    FROM notifications 
                     WHERE user_id = :user_id AND is_read = FALSE
                 """),
                 {"user_id": user_id}
