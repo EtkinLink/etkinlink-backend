@@ -4,7 +4,7 @@ import secrets
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import text
 from datetime import datetime, timedelta
-from utils.mail_service import generate_verification_token, verify_token, send_verification_email, send_password_reset_email
+from backend.utils.mail_service import generate_verification_token, verify_token, send_verification_email, send_password_reset_email
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
@@ -298,3 +298,46 @@ def login():
             return response
     except Exception as e:
         return {"error": f"Login failed: {str(e)}"}, 503
+
+
+@auth_bp.get("/me")
+def get_current_user():
+    """
+    Get current user profile including role.
+    Returns user information based on JWT token.
+    """
+    from backend.utils.auth_utils import verify_jwt, AuthError
+    
+    try:
+        user_id = verify_jwt()
+        
+        with current_app.engine.connect() as conn:
+            user = conn.execute(
+                text("""
+                    SELECT 
+                        u.id,
+                        u.username,
+                        u.name,
+                        u.email,
+                        u.role,
+                        u.university_id,
+                        u.photo_url,
+                        u.created_at,
+                        u.is_blocked,
+                        uni.name as university_name
+                    FROM users u
+                    LEFT JOIN universities uni ON u.university_id = uni.id
+                    WHERE u.id = :id
+                """),
+                {"id": user_id}
+            ).fetchone()
+            
+            if not user:
+                return {"error": "User not found"}, 404
+            
+            return jsonify(dict(user._mapping))
+    
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": str(e)}, 503
