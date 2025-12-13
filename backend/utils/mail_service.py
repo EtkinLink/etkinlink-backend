@@ -112,10 +112,10 @@ def send_verification_email(
     Sends email verification mail.
     """
 
-    base_url = current_app.config.get("BACKEND_BASE_URL")
+    base_url = current_app.config.get("FRONTEND_BASE_URL")
 
     if not base_url:
-        raise RuntimeError("BACKEND_BASE_URL is not configured")
+        raise RuntimeError("FRONTEND_BASE_URL is not configured")
 
     verification_url = f"{base_url}/auth/register/verify/{token}"
 
@@ -141,12 +141,12 @@ def send_password_reset_email(to_email: str, reset_token: str):
     FRONTEND_URL is taken from app config.
     """
 
-    frontend_url = current_app.config.get(
-        "FRONTEND_URL",
-        "http://localhost:3000"
-    )
+    frontend_url = current_app.config["FRONTEND_BASE_URL"]
 
-    reset_url = f"{frontend_url}/reset-password?token={reset_token}"
+    # to save broken urls in email clients. (+ , / , =)
+    from urllib.parse import quote
+    reset_url = f"{frontend_url}/reset-password?token={quote(reset_token)}"
+
 
     html_body = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px;">
