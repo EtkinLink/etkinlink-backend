@@ -66,7 +66,6 @@ def get_organization_by_id(org_id):
 
 @organization_bp.post("/")
 def create_organization():
-    """Create a new organization (only authenticated users)."""
     try:
         user_id = verify_jwt()
 
@@ -74,12 +73,15 @@ def create_organization():
         if not data or "name" not in data:
             return {"error": "Organization name is required"}, 400
 
-        with current_app.engine.connect() as conn:
-            exists = conn.execute(text("SELECT id FROM organizations WHERE name = :n"), {"n": data["name"]}).fetchone()
+        with current_app.engine.begin() as conn:  # <-- auto-commit / auto-rollback
+            exists = conn.execute(
+                text("SELECT id FROM organizations WHERE name = :n"),
+                {"n": data["name"]}
+            ).fetchone()
             if exists:
                 return {"error": "Organization name already exists"}, 409
 
-            conn.execute(text("""
+            res = conn.execute(text("""
                 INSERT INTO organizations (name, description, owner_user_id, photo_url, status, created_at, updated_at)
                 VALUES (:name, :description, :owner_user_id, :photo_url, 'ACTIVE', NOW(), NOW())
             """), {
@@ -88,10 +90,8 @@ def create_organization():
                 "owner_user_id": user_id,
                 "photo_url": data.get("photo_url")
             })
-            conn.commit()
 
-            org_id_row = conn.execute(text("SELECT LAST_INSERT_ID()")).fetchone()
-            new_org_id = org_id_row[0]
+            new_org_id = res.lastrowid  # <-- LAST_INSERT_ID yerine bu daha güvenli
 
             conn.execute(text("""
                 INSERT INTO organization_members (organization_id, user_id, role, joined_at)
@@ -99,11 +99,12 @@ def create_organization():
             """), {"oid": new_org_id, "uid": user_id})
 
         return {"message": "Organization created successfully"}, 201
-    
+
     except AuthError as e:
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 
 @organization_bp.post("/<int:org_id>/apply")
