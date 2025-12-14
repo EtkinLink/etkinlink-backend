@@ -453,14 +453,13 @@ def manage_event_application(application_id):
     try:
         organizer_user_id = verify_jwt()
 
-        data = request.get_json()
-        new_status = data.get("status", "").upper()
+        data = request.get_json() or {}
+        new_status = (data.get("status") or "").upper()
 
         if new_status not in ["APPROVED", "REJECTED"]:
             return {"error": "Invalid status. Must be 'APPROVED' or 'REJECTED'"}, 400
 
-        with engine.connect() as conn:
-            
+        with engine.begin() as conn:  # <-- TEK TRANSACTION
             application_details = conn.execute(
                 text("""
                     SELECT 
@@ -471,58 +470,50 @@ def manage_event_application(application_id):
                     FROM applications a
                     JOIN events e ON a.event_id = e.id
                     WHERE a.id = :app_id
+                    FOR UPDATE
                 """),
                 {"app_id": application_id}
             ).fetchone()
 
             if not application_details:
                 return {"error": "Application not found"}, 404
-            
-            if application_details.current_status != 'PENDING':
+
+            if application_details.current_status != "PENDING":
                 return {"error": "Application has already been processed"}, 409
 
-            try:
-                check_event_ownership(conn, application_details.event_id, organizer_user_id)
-            except AuthError as auth_err:
-                return {"error": auth_err.args[0]}, auth_err.code
+            check_event_ownership(conn, application_details.event_id, organizer_user_id)
 
-            
-            with conn.begin() as trans:
-                
-                if new_status == 'APPROVED':
-                    
-                    user_limit = application_details.user_limit
-                    
-                    if user_limit is not None:
-                        current_participant_count = conn.execute(
-                            text("SELECT COUNT(*) FROM participants WHERE event_id = :eid"),
-                            {"eid": application_details.event_id}
-                        ).scalar()
-                        
-                        if current_participant_count >= user_limit:
-                            trans.rollback()
-                            return {"error": "Event user limit reached. Cannot approve."}, 409
+            if new_status == "APPROVED":
+                user_limit = application_details.user_limit
 
-                    ticket_code = str(uuid.uuid4())
-                    
-                    conn.execute(
-                        text("""
-                            INSERT INTO participants (event_id, user_id, application_id, status, ticket_code)
-                            VALUES (:eid, :uid, :app_id, 'NO_SHOW', :ticket)
-                        """),
-                        {
-                            "eid": application_details.event_id,
-                            "uid": application_details.applicant_user_id,
-                            "app_id": application_id,
-                            "ticket": ticket_code
-                        }
-                    )
-                
+                if user_limit is not None:
+                    current_participant_count = conn.execute(
+                        text("SELECT COUNT(*) FROM participants WHERE event_id = :eid"),
+                        {"eid": application_details.event_id}
+                    ).scalar()
+
+                    if current_participant_count >= user_limit:
+                        return {"error": "Event user limit reached. Cannot approve."}, 409
+
+                ticket_code = str(uuid.uuid4())
+
                 conn.execute(
-                    text("UPDATE applications SET status = :status WHERE id = :app_id"),
-                    {"status": new_status, "app_id": application_id}
+                    text("""
+                        INSERT INTO participants (event_id, user_id, application_id, status, ticket_code)
+                        VALUES (:eid, :uid, :app_id, 'NO_SHOW', :ticket)
+                    """),
+                    {
+                        "eid": application_details.event_id,
+                        "uid": application_details.applicant_user_id,
+                        "app_id": application_id,
+                        "ticket": ticket_code
+                    }
                 )
-            
+
+            conn.execute(
+                text("UPDATE applications SET status = :status WHERE id = :app_id"),
+                {"status": new_status, "app_id": application_id}
+            )
 
         return {"message": f"Application {new_status.lower()}"}, 200
 
@@ -530,6 +521,7 @@ def manage_event_application(application_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": f"An error occurred: {str(e)}"}, 503
+
 
 
 @app.get("/applications")
