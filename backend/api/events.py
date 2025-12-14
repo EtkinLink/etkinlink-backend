@@ -21,104 +21,63 @@ def get_user_gender(conn, user_id):
 # Register directly for an event without application
 @events_bp.post("/<int:event_id>/register")
 def register_for_event(event_id):
-    """
-    Allows an authenticated user to register directly for an event
-    that does not require an application.
-    - Sadece status = FUTURE olan
-    - ve allow_direct_registration = 1 olan event'ler için çalışır.
-    """
     try:
         user_id = verify_jwt()
 
-        with current_app.engine.connect() as conn:
-            # allow_direct_registration'ı da çek
+        with current_app.engine.begin() as conn:
             event = conn.execute(
                 text("""
-                    SELECT id, status, user_limit, has_register , only_girls
+                    SELECT id, status, user_limit, has_register, only_girls
                     FROM events
                     WHERE id = :eid
                 """),
                 {"eid": event_id}
             ).fetchone()
-            
+
             if not event:
                 return {"error": "Event not found"}, 404
-            
-            # Event aktif mi?
-            if event.status != 'FUTURE':
-                return {
-                    "error": "This event is not active or has already been completed"
-                }, 400
-            
+
+            if event.status != "FUTURE":
+                return {"error": "This event is not active or has already been completed"}, 400
+
             if event.only_girls:
                 user_gender = get_user_gender(conn, user_id)
                 if user_gender != "FEMALE":
                     return {"error": "This event is only available for female users."}, 403
 
-            # Bu event direct register'a izin veriyor mu?
             if event.has_register:
-                return {
-                    "error": "This event does not allow direct registration. Please apply instead."
-                }, 400
+                return {"error": "This event does not allow direct registration. Please apply instead."}, 400
 
-            # Zaten katılımcı mı?
             is_participant = conn.execute(
-                text("""
-                    SELECT id 
-                    FROM participants 
-                    WHERE event_id = :eid AND user_id = :uid
-                """),
+                text("SELECT id FROM participants WHERE event_id = :eid AND user_id = :uid"),
                 {"eid": event_id, "uid": user_id}
             ).fetchone()
-            
             if is_participant:
                 return {"error": "You are already registered for this event"}, 409
-            
-            # Daha önce application yapmış mı?
+
             has_application = conn.execute(
-                text("""
-                    SELECT id 
-                    FROM applications 
-                    WHERE event_id = :eid AND user_id = :uid
-                """),
+                text("SELECT id FROM applications WHERE event_id = :eid AND user_id = :uid"),
                 {"eid": event_id, "uid": user_id}
             ).fetchone()
-
             if has_application:
-                 return {
-                     "error": "You have a pending or processed application for this event. Cannot register directly."
-                 }, 409
+                return {"error": "You have a pending or processed application for this event. Cannot register directly."}, 409
 
-            # Kayıt kısmı transaction içinde
-            with conn.begin() as trans:
-                user_limit = event.user_limit
-                
-                if user_limit is not None:
-                    current_participant_count = conn.execute(
-                        text("SELECT COUNT(*) FROM participants WHERE event_id = :eid"),
-                        {"eid": event_id}
-                    ).scalar()
-                    
-                    if current_participant_count >= user_limit:
-                        # trans.rollback() demene gerek yok aslında,
-                        # context manager exception olmadığı için commit etmeyecek
-                        return {
-                            "error": "Event user limit reached. Cannot register."
-                        }, 409
+            if event.user_limit is not None:
+                current_count = conn.execute(
+                    text("SELECT COUNT(*) FROM participants WHERE event_id = :eid"),
+                    {"eid": event_id}
+                ).scalar()
+                if current_count >= event.user_limit:
+                    return {"error": "Event user limit reached. Cannot register."}, 409
 
-                ticket_code = str(uuid.uuid4())
-                
-                conn.execute(
-                    text("""
-                        INSERT INTO participants (event_id, user_id, application_id, status, ticket_code)
-                        VALUES (:eid, :uid, NULL, 'NO_SHOW', :ticket)
-                    """),
-                    {
-                        "eid": event_id,
-                        "uid": user_id,
-                        "ticket": ticket_code
-                    }
-                )
+            ticket_code = str(uuid.uuid4())
+            conn.execute(
+                text("""
+                    INSERT INTO participants (event_id, user_id, application_id, status, ticket_code)
+                    VALUES (:eid, :uid, NULL, 'NO_SHOW', :ticket)
+                """),
+                {"eid": event_id, "uid": user_id, "ticket": ticket_code}
+            )
 
         return {"message": "Registration successful", "ticket_code": ticket_code}, 201
 
@@ -126,6 +85,7 @@ def register_for_event(event_id):
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": f"An error occurred: {str(e)}"}, 503
+
 
 # Apply to an event with application
 @events_bp.post("/<int:event_id>/apply")
