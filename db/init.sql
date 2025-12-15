@@ -81,7 +81,7 @@ CREATE TABLE events (
   ends_at                 DATETIME,
   location_name           VARCHAR(500),
   photo_url               VARCHAR(500),
-  status                  ENUM('PENDING','FUTURE','COMPLETED','REJECTED') NOT NULL DEFAULT 'PENDING',
+  status                  ENUM('FUTURE','COMPLETED') NOT NULL DEFAULT 'FUTURE',
   user_limit              INT UNSIGNED,              
   latitude                DECIMAL(9,6),
   longitude               DECIMAL(9,6),
@@ -652,7 +652,7 @@ VALUES
 
   (3, 'USER', NULL, 'Chess Tournament', 'Open Swiss chess tournament', 6, 20,
    '2025-03-05 10:00:00', '2025-03-05 18:00:00', 'METU Culture and Convention Center', NULL,
-   'PENDING', 40, 39.9334, 32.8597, NOW(), NOW()),
+   'FUTURE', 40, 39.9334, 32.8597, NOW(), NOW()),
 
   (4, 'USER', NULL, 'AI Seminar', 'Turing on machine learning', 8, 0,
    '2024-11-15 15:00:00', '2024-11-15 17:00:00', 'University College London, Hall A', NULL,
@@ -664,7 +664,7 @@ VALUES
 
   (6, 'USER', NULL, 'Startup Pitch', 'Elon hosts pitch event', 10, 0,
    '2025-02-01 19:00:00', '2025-02-01 22:00:00', 'Silicon Valley Innovation Hub', NULL,
-   'PENDING', 500, 34.0522, -118.2437, NOW(), NOW()),
+   'FUTURE', 500, 34.0522, -118.2437, NOW(), NOW()),
 
   (7, 'USER', NULL, 'Hackathon', '48-hour hackathon', 1, 0,
    '2025-05-10 09:00:00', '2025-05-12 09:00:00', 'Facebook HQ, Menlo Park', NULL,
@@ -676,7 +676,7 @@ VALUES
 
   (9, 'USER', NULL, 'iOS Dev Talk', 'SwiftUI workshop', 4, 10,
    '2025-07-01 10:00:00', '2025-07-01 13:00:00', 'Apple Park Auditorium', NULL,
-   'PENDING', 80, 37.3348, -122.0090, NOW(), NOW()),
+   'FUTURE', 80, 37.3348, -122.0090, NOW(), NOW()),
 
   (10, 'USER', NULL, 'C Programming', 'Dennis explains pointers', 4, 5,
    '2025-02-20 11:00:00', '2025-02-20 13:00:00', 'New York Tech Hub', NULL,
@@ -684,7 +684,7 @@ VALUES
 
   (1, 'ORGANIZATION', 1, 'AI Bootcamp', 'Deep learning bootcamp hosted by ITU AI Club', 4, 0,
    '2025-09-10 09:00:00', '2025-09-12 18:00:00', 'ITU AI Lab', NULL,
-   'PENDING', 100, 41.1055, 29.0258, NOW(), NOW()),
+   'FUTURE', 100, 41.1055, 29.0258, NOW(), NOW()),
 
   (2, 'ORGANIZATION', 2, 'Jazz Improvisation Workshop', 'Bogazici Jazz Society presents a hands-on improvisation session', 2, 30,
    '2024-11-20 14:00:00', '2024-11-20 18:00:00', 'Bogazici University Music Hall', NULL,
@@ -696,20 +696,12 @@ VALUES
 
   (5, 'ORGANIZATION', 4, 'Startup Fair 2025', 'Koc Entrepreneurship Club startup showcase', 10, 0,
    '2025-11-05 10:00:00', '2025-11-05 17:00:00', 'Koc University Main Hall', NULL,
-   'PENDING', 300, 41.2000, 29.0150, NOW(), NOW()),
+   'FUTURE', 300, 41.2000, 29.0150, NOW(), NOW()),
 
   (10, 'ORGANIZATION', 5, 'Hack the Future', 'Hacettepe Coding Society annual hackathon', 1, 0,
    '2025-10-25 09:00:00', '2025-10-27 18:00:00', 'Hacettepe University Tech Center', NULL,
    'FUTURE', 250, 39.9331, 32.8596, NOW(), NOW()),
   
-  -- Birkaç rejected event örneği
-  (1, 'USER', NULL, 'Spam Event Test', 'This is a test spam event', 10, 0,
-   '2025-06-01 10:00:00', '2025-06-01 12:00:00', 'Test Location', NULL,
-   'REJECTED', 50, 41.1050, 29.0250, NOW(), NOW()),
-   
-  (2, 'ORGANIZATION', 2, 'Inappropriate Content Event', 'Event with policy violations', 10, 0,
-   '2025-07-01 10:00:00', '2025-07-01 12:00:00', 'Test Location', NULL,
-   'REJECTED', 30, 41.0892, 29.0501, NOW(), NOW());
 
 INSERT INTO organization_members (organization_id, user_id, role, joined_at)
 VALUES
