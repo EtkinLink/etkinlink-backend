@@ -22,102 +22,102 @@ admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 # OVERVIEW DASHBOARD
 # =============================================
 
-@admin_bp.get("/overview")
+@admin_bp.get("/overview/summary")
 @require_admin
-def get_overview():
+def get_overview_summary():
     """
-    Get overview dashboard statistics and charts.
-    Returns: total events, users, clubs, pending events, active events,
-    attendance, monthly charts for events and attendance.
+    Returns only the scalar counts for the dashboard cards.
+    Loads very fast.
     """
     try:
         with current_app.engine.connect() as conn:
-            # Total events
-            total_events = conn.execute(
-                text("SELECT COUNT(*) FROM events")
-            ).scalar()
-            
-            # Total users
-            total_users = conn.execute(
-                text("SELECT COUNT(*) FROM users")
-            ).scalar()
-            
-            # Active clubs
-            active_clubs = conn.execute(
-                text("SELECT COUNT(*) FROM organizations WHERE status='ACTIVE'")
-            ).scalar()
-            
-            # Pending events
-            pending_events = conn.execute(
-                text("SELECT COUNT(*) FROM events WHERE status='PENDING'")
-            ).scalar()
-            
-            # Active events (FUTURE status)
-            active_events = conn.execute(
-                text("SELECT COUNT(*) FROM events WHERE status='FUTURE'")
-            ).scalar()
-            
-            # Total attendance (ATTENDED status)
-            total_attendance = conn.execute(
-                text("SELECT COUNT(*) FROM participants WHERE status='ATTENDED'")
-            ).scalar()
-            
-            # Pending reports
-            pending_reports = conn.execute(
-                text("SELECT COUNT(*) FROM reports WHERE status='PENDING'")
-            ).scalar()
-            
-            # Unreviewed reports
-            unreviewed_reports = conn.execute(
-                text("SELECT COUNT(*) FROM reports WHERE is_reviewed = FALSE")
-            ).scalar()
-            
-            # Monthly events chart (last 6 months)
-            monthly_events = conn.execute(text("""
-                SELECT 
-                    DATE_FORMAT(created_at, '%Y-%m') as month,
-                    COUNT(*) as count
-                FROM events
-                WHERE created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
-                GROUP BY month
-                ORDER BY month ASC
-            """)).fetchall()
-            
-            # Monthly attendance chart (last 6 months)
-            monthly_attendance = conn.execute(text("""
-                SELECT 
-                    DATE_FORMAT(e.starts_at, '%Y-%m') as month,
-                    COUNT(p.id) as count
-                FROM participants p
-                JOIN events e ON p.event_id = e.id
-                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
-                    AND p.status = 'ATTENDED'
-                GROUP BY month
-                ORDER BY month ASC
-            """)).fetchall()
-            
+            # Sadece tekil sayılar (COUNT)
+            total_events = conn.execute(text("SELECT COUNT(*) FROM events")).scalar()
+            total_users = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
+            active_clubs = conn.execute(text("SELECT COUNT(*) FROM organizations WHERE status='ACTIVE'")).scalar()
+            active_events = conn.execute(text("SELECT COUNT(*) FROM events WHERE status='FUTURE'")).scalar()
+            total_attendance = conn.execute(text("SELECT COUNT(*) FROM participants WHERE status='ATTENDED'")).scalar()
+            pending_reports = conn.execute(text("SELECT COUNT(*) FROM reports WHERE status='PENDING'")).scalar()
+            unreviewed_reports = conn.execute(text("SELECT COUNT(*) FROM reports WHERE is_reviewed = FALSE")).scalar()
+
             return jsonify({
                 "total_events": total_events,
                 "total_users": total_users,
                 "active_clubs": active_clubs,
-                "pending_events": pending_events,
                 "active_events": active_events,
                 "total_attendance": total_attendance,
                 "pending_reports": pending_reports,
                 "unreviewed_reports": unreviewed_reports,
-                "monthly_events_chart": [
-                    {"month": row.month, "count": row.count} 
-                    for row in monthly_events
-                ],
-                "monthly_attendance_chart": [
-                    {"month": row.month, "count": row.count} 
-                    for row in monthly_attendance
-                ]
+            })
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@admin_bp.get("/overview/charts")
+@require_admin
+def get_overview_charts():
+    """
+    Returns data for charts (Weekly, Monthly, 6-Months).
+    May take longer to load.
+    """
+    try:
+        with current_app.engine.connect() as conn:
+            # --- CHARTS: EVENTS ---
+            events_1w = conn.execute(text("""
+                SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as date, COUNT(*) as count
+                FROM events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                GROUP BY date ORDER BY date ASC
+            """)).fetchall()
+
+            events_1m = conn.execute(text("""
+                SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as date, COUNT(*) as count
+                FROM events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)
+                GROUP BY date ORDER BY date ASC
+            """)).fetchall()
+
+            events_6m = conn.execute(text("""
+                SELECT DATE_FORMAT(created_at, '%Y-%m') as date, COUNT(*) as count
+                FROM events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+                GROUP BY date ORDER BY date ASC
+            """)).fetchall()
+            
+            # --- CHARTS: ATTENDANCE ---
+            attendance_1w = conn.execute(text("""
+                SELECT DATE_FORMAT(e.starts_at, '%Y-%m-%d') as date, COUNT(p.id) as count
+                FROM participants p JOIN events e ON p.event_id = e.id
+                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND p.status = 'ATTENDED'
+                GROUP BY date ORDER BY date ASC
+            """)).fetchall()
+
+            attendance_1m = conn.execute(text("""
+                SELECT DATE_FORMAT(e.starts_at, '%Y-%m-%d') as date, COUNT(p.id) as count
+                FROM participants p JOIN events e ON p.event_id = e.id
+                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH) AND p.status = 'ATTENDED'
+                GROUP BY date ORDER BY date ASC
+            """)).fetchall()
+
+            attendance_6m = conn.execute(text("""
+                SELECT DATE_FORMAT(e.starts_at, '%Y-%m') as date, COUNT(p.id) as count
+                FROM participants p JOIN events e ON p.event_id = e.id
+                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH) AND p.status = 'ATTENDED'
+                GROUP BY date ORDER BY date ASC
+            """)).fetchall()
+            
+            return jsonify({
+                "events": {
+                    "last_week": [{"date": r.date, "count": r.count} for r in events_1w],
+                    "last_month": [{"date": r.date, "count": r.count} for r in events_1m],
+                    "last_6_months": [{"date": r.date, "count": r.count} for r in events_6m]
+                },
+                "attendance": {
+                    "last_week": [{"date": r.date, "count": r.count} for r in attendance_1w],
+                    "last_month": [{"date": r.date, "count": r.count} for r in attendance_1m],
+                    "last_6_months": [{"date": r.date, "count": r.count} for r in attendance_6m]
+                }
             })
     
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 # =============================================
 # EVENTS MANAGEMENT
@@ -178,42 +178,100 @@ def get_all_events():
         return {"error": str(e)}, 503
 
 
-@admin_bp.put("/events/<int:event_id>/status")
+@admin_bp.get("/events/<int:event_id>")
 @require_admin
-def update_event_status(event_id):
+def get_event_details_for_admin(event_id):
     """
-    Update event status (PENDING, FUTURE, COMPLETED, REJECTED).
-    Body: {"status": "FUTURE"}
+    Get FULL event details for admin, bypassing privacy settings.
+    Fixed: Removed 'created_at' fields from participants and applications
+    as they don't exist in the database schema.
     """
     try:
-        data = request.get_json()
-        new_status = data.get("status", "").upper()
-        
-        if new_status not in ["PENDING", "FUTURE", "COMPLETED", "REJECTED"]:
-            return {"error": "Invalid status. Must be PENDING, FUTURE, COMPLETED, or REJECTED"}, 400
-        
         with current_app.engine.connect() as conn:
-            # Check if event exists
-            event = conn.execute(
-                text("SELECT id FROM events WHERE id = :id"),
-                {"id": event_id}
-            ).fetchone()
-            
+            # 1. Etkinlik Temel Bilgileri
+            event = conn.execute(text("""
+                SELECT 
+                    e.id,
+                    e.title,
+                    e.explanation,
+                    e.price,
+                    e.starts_at,
+                    e.ends_at,
+                    e.location_name,
+                    e.status,
+                    e.user_limit,
+                    e.photo_url,
+                    e.created_at,
+                    e.updated_at,
+                    e.owner_type,
+                    e.is_participants_private,
+                    e.only_girls,
+                    et.code AS event_type,
+                    COALESCE(o.name, u.username) as owner_name,
+                    u.email as owner_email
+                FROM events e
+                LEFT JOIN users u ON e.owner_user_id = u.id
+                LEFT JOIN organizations o ON e.owner_organization_id = o.id
+                LEFT JOIN event_types et ON e.type_id = et.id
+                WHERE e.id = :id
+            """), {"id": event_id}).fetchone()
+
             if not event:
                 return {"error": "Event not found"}, 404
-            
-            # Update status
-            conn.execute(
-                text("UPDATE events SET status = :status, updated_at = NOW() WHERE id = :id"),
-                {"status": new_status, "id": event_id}
-            )
-            conn.commit()
-        
-        return {"message": f"Event status updated to {new_status}"}, 200
-    
+
+            # 2. Katılımcılar
+            # DÜZELTME: p.created_at kaldırıldı. init.sql'de yok.
+            participants = conn.execute(text("""
+                SELECT 
+                    p.id,
+                    p.user_id,
+                    u.username,
+                    u.name,
+                    u.email,
+                    p.status,
+                    p.ticket_code
+                FROM participants p
+                JOIN users u ON u.id = p.user_id
+                WHERE p.event_id = :id
+            """), {"id": event_id}).fetchall()
+
+            # 3. Başvurular
+            # DÜZELTME: a.created_at kaldırıldı. init.sql'de yok.
+            applications = conn.execute(text("""
+                SELECT 
+                    a.id,
+                    u.username,
+                    a.why_me,
+                    a.status
+                FROM applications a
+                JOIN users u ON a.user_id = u.id
+                WHERE a.event_id = :id
+            """), {"id": event_id}).fetchall()
+
+            # 4. Raporlar
+            # Reports tablosunda created_at VAR. Sorun yok.
+            reports = conn.execute(text("""
+                SELECT 
+                    r.id,
+                    u.username as reporter,
+                    r.reason,
+                    r.status,
+                    r.created_at
+                FROM reports r
+                JOIN users u ON r.reporter_user_id = u.id
+                WHERE r.event_id = :id
+            """), {"id": event_id}).fetchall()
+
+            # Response Oluşturma
+            data = dict(event._mapping)
+            data["participants"] = [dict(p._mapping) for p in participants]
+            data["applications"] = [dict(a._mapping) for a in applications]
+            data["reports"] = [dict(r._mapping) for r in reports]
+
+            return jsonify(data)
+
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @admin_bp.delete("/events/<int:event_id>")
 @require_admin
@@ -299,6 +357,51 @@ def get_all_users():
     except Exception as e:
         return {"error": str(e)}, 503
 
+
+@admin_bp.get("/users/<int:user_id>")
+@require_admin
+def get_user_details(user_id):
+    """
+    Get full profile details of a specific user for admin.
+    """
+    try:
+        with current_app.engine.connect() as conn:
+            # Kullanıcı detaylarını çek (Üniversite adı ile birlikte)
+            user = conn.execute(
+                text("""
+                    SELECT 
+                        u.id,
+                        u.name,
+                        u.username,
+                        u.email,
+                        u.role,
+                        u.gender,
+                        u.photo_url,
+                        u.is_blocked,
+                        u.created_at,
+                        uni.name as university_name,
+                        (
+                            SELECT COUNT(*) FROM participants p 
+                            WHERE p.user_id = u.id AND p.status = 'ATTENDED'
+                        ) as total_attendance,
+                        (
+                            SELECT COUNT(*) FROM events e 
+                            WHERE e.owner_user_id = u.id
+                        ) as events_created
+                    FROM users u
+                    LEFT JOIN universities uni ON u.university_id = uni.id
+                    WHERE u.id = :uid
+                """),
+                {"uid": user_id}
+            ).fetchone()
+            
+            if not user:
+                return {"error": "User not found"}, 404
+            
+            return jsonify(dict(user._mapping))
+    
+    except Exception as e:
+        return {"error": str(e)}, 503
 
 @admin_bp.get("/users/<int:user_id>/events")
 @require_admin
@@ -532,6 +635,89 @@ def get_all_clubs():
         return {"error": str(e)}, 503
 
 
+@admin_bp.get("/clubs/<int:club_id>")
+@require_admin
+def get_club_details(club_id):
+    """
+    Get FULL club details for admin.
+    Includes:
+    - Basic Info & Stats
+    - Owner Contact Info (Email, Name)
+    - Full Member List (with emails)
+    - Events List
+    """
+    try:
+        with current_app.engine.connect() as conn:
+            # 1. Kulüp ve Sahip Detayları
+            club = conn.execute(text("""
+                SELECT 
+                    o.id,
+                    o.name,
+                    o.description,
+                    o.status,
+                    o.photo_url,
+                    o.created_at,
+                    o.updated_at,
+                    o.owner_user_id,
+                    u.username AS owner_username,
+                    u.name AS owner_name,
+                    u.email AS owner_email,  -- Admin için önemli: İletişim
+                    (
+                        SELECT COUNT(*) FROM organization_members m 
+                        WHERE m.organization_id = o.id
+                    ) as member_count,
+                    (
+                        SELECT COUNT(*) FROM events e 
+                        WHERE e.owner_organization_id = o.id
+                    ) as event_count
+                FROM organizations o
+                LEFT JOIN users u ON o.owner_user_id = u.id
+                WHERE o.id = :id
+            """), {"id": club_id}).fetchone()
+
+            if not club:
+                return {"error": "Club not found"}, 404
+
+            # 2. Üyeler (Detaylı - Email dahil)
+            members = conn.execute(text("""
+                SELECT 
+                    m.user_id,
+                    u.username,
+                    u.name,
+                    u.email,
+                    u.photo_url,
+                    m.role,
+                    m.joined_at
+                FROM organization_members m
+                JOIN users u ON m.user_id = u.id
+                WHERE m.organization_id = :id
+                ORDER BY m.role ASC, m.joined_at DESC
+            """), {"id": club_id}).fetchall()
+
+            # 3. Kulübün Etkinlikleri
+            events = conn.execute(text("""
+                SELECT 
+                    e.id,
+                    e.title,
+                    e.status,
+                    e.starts_at,
+                    e.created_at,
+                    (SELECT COUNT(*) FROM participants p WHERE p.event_id = e.id) as participant_count
+                FROM events e
+                WHERE e.owner_organization_id = :id
+                ORDER BY e.starts_at DESC
+            """), {"id": club_id}).fetchall()
+            
+            # Response Hazırlama
+            data = dict(club._mapping)
+            data["members"] = [dict(m._mapping) for m in members]
+            data["events"] = [dict(e._mapping) for e in events]
+
+            return jsonify(data)
+
+    except Exception as e:
+        return {"error": str(e)}, 503
+
 @admin_bp.get("/clubs/stats")
 @require_admin
 def get_clubs_stats():
@@ -601,7 +787,39 @@ def update_club_status(club_id):
     except Exception as e:
         return {"error": str(e)}, 503
 
-
+@admin_bp.delete("/clubs/<int:club_id>")
+@require_admin
+def delete_club(club_id):
+    """
+    Delete a club/organization permanently.
+    Admin only.
+    """
+    try:
+        with current_app.engine.connect() as conn:
+            # 1. Kulüp var mı kontrol et
+            club = conn.execute(
+                text("SELECT id FROM organizations WHERE id = :id"),
+                {"id": club_id}
+            ).fetchone()
+            
+            if not club:
+                return {"error": "Club not found"}, 404
+            
+            # 2. Kulübü sil
+            # Not: init.sql'deki ayarlara göre:
+            # - Üyeler (organization_members) -> OTOMATİK SİLİNİR (ON DELETE CASCADE)
+            # - Başvurular (organization_applications) -> OTOMATİK SİLİNİR (ON DELETE CASCADE)
+            # - Etkinlikler (events) -> SİLİNMEZ, owner_organization_id NULL olur (ON DELETE SET NULL)
+            conn.execute(
+                text("DELETE FROM organizations WHERE id = :id"),
+                {"id": club_id}
+            )
+            conn.commit()
+        
+        return {"message": "Club deleted successfully"}, 200
+    
+    except Exception as e:
+        return {"error": str(e)}, 503
 # =============================================
 # ATTENDANCE MANAGEMENT
 # =============================================
@@ -710,6 +928,81 @@ def get_top_attendance_events():
         return {"error": str(e)}, 503
 
 
+@admin_bp.get("/attendance/charts")
+@require_admin
+def get_attendance_charts():
+    """
+    Get attendance statistics for charts.
+    Returns:
+    - weekly: Last 7 days (Daily breakdown)
+    - monthly: Last 1 month (Daily breakdown)
+    - six_months: Last 6 months (Monthly breakdown)
+    - yearly: Last 12 months (Monthly breakdown)
+    """
+    try:
+        with current_app.engine.connect() as conn:
+            # 1. Haftalık (Son 7 Gün - Gün Bazlı)
+            weekly = conn.execute(text("""
+                SELECT 
+                    DATE_FORMAT(e.starts_at, '%Y-%m-%d') as date, 
+                    COUNT(p.id) as count
+                FROM participants p
+                JOIN events e ON p.event_id = e.id
+                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                  AND p.status = 'ATTENDED'
+                GROUP BY date 
+                ORDER BY date ASC
+            """)).fetchall()
+
+            # 2. Aylık (Son 1 Ay - Gün Bazlı)
+            monthly = conn.execute(text("""
+                SELECT 
+                    DATE_FORMAT(e.starts_at, '%Y-%m-%d') as date, 
+                    COUNT(p.id) as count
+                FROM participants p
+                JOIN events e ON p.event_id = e.id
+                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)
+                  AND p.status = 'ATTENDED'
+                GROUP BY date 
+                ORDER BY date ASC
+            """)).fetchall()
+
+            # 3. 6 Aylık (Son 6 Ay - Ay Bazlı)
+            six_months = conn.execute(text("""
+                SELECT 
+                    DATE_FORMAT(e.starts_at, '%Y-%m') as date, 
+                    COUNT(p.id) as count
+                FROM participants p
+                JOIN events e ON p.event_id = e.id
+                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+                  AND p.status = 'ATTENDED'
+                GROUP BY date 
+                ORDER BY date ASC
+            """)).fetchall()
+
+            # 4. Yıllık (Son 12 Ay - Ay Bazlı)
+            yearly = conn.execute(text("""
+                SELECT 
+                    DATE_FORMAT(e.starts_at, '%Y-%m') as date, 
+                    COUNT(p.id) as count
+                FROM participants p
+                JOIN events e ON p.event_id = e.id
+                WHERE e.starts_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+                  AND p.status = 'ATTENDED'
+                GROUP BY date 
+                ORDER BY date ASC
+            """)).fetchall()
+
+            return jsonify({
+                "weekly": [{"date": row.date, "count": row.count} for row in weekly],
+                "monthly": [{"date": row.date, "count": row.count} for row in monthly],
+                "six_months": [{"date": row.date, "count": row.count} for row in six_months],
+                "yearly": [{"date": row.date, "count": row.count} for row in yearly]
+            })
+
+    except Exception as e:
+        return {"error": str(e)}, 503
+
 # =============================================
 # REPORTS MANAGEMENT
 # =============================================
@@ -718,32 +1011,27 @@ def get_top_attendance_events():
 @require_admin
 def get_all_reports():
     """
-    Get all reports with event and user details.
-    Supports pagination and filtering by status and is_reviewed.
+    Get reports filtered by review status.
     Query params: 
       - ?page=1&per_page=20
-      - ?status=PENDING
-      - ?is_reviewed=false (show only unreviewed)
-      - ?is_reviewed=true (show only reviewed)
+      - ?status=REVIEWED    -> Returns is_reviewed = TRUE
+      - ?status=UNREVIEWED  -> Returns is_reviewed = FALSE
+      - (No status)         -> Returns ALL
     """
     try:
-        status_filter = request.args.get("status")
-        is_reviewed_filter = request.args.get("is_reviewed")
+        # Frontend 'status' parametresi ile 'REVIEWED' veya 'UNREVIEWED' gönderecek
+        status_filter = request.args.get("status", "").upper()
         pagination_params = get_pagination_params()
         
         with current_app.engine.connect() as conn:
             where_clauses = []
             params = {}
             
-            if status_filter:
-                where_clauses.append("r.status = :status")
-                params["status"] = status_filter.upper()
-            
-            if is_reviewed_filter is not None:
-                # Convert string to boolean
-                is_reviewed = is_reviewed_filter.lower() in ['true', '1', 'yes']
-                where_clauses.append("r.is_reviewed = :is_reviewed")
-                params["is_reviewed"] = is_reviewed
+            # Filtreleme Mantığı: is_reviewed sütununa bakıyoruz
+            if status_filter == "REVIEWED":
+                where_clauses.append("r.is_reviewed = TRUE")
+            elif status_filter == "UNREVIEWED":
+                where_clauses.append("r.is_reviewed = FALSE")
             
             where_clause = ""
             if where_clauses:
@@ -758,16 +1046,18 @@ def get_all_reports():
                     COALESCE(o.name, u_owner.username) as event_owner,
                     u_reporter.username as reporter_username,
                     r.reason,
-                    r.status,
+                    r.status AS decision, -- (ACCEPTED/REJECTED/PENDING) Karar sonucu olarak döner
                     r.is_reviewed,
                     r.admin_notes,
-                    r.created_at
+                    r.created_at,
+                    r.updated_at
                 FROM reports r
                 JOIN events e ON r.event_id = e.id
                 JOIN users u_reporter ON r.reporter_user_id = u_reporter.id
                 LEFT JOIN organizations o ON e.owner_organization_id = o.id
                 LEFT JOIN users u_owner ON e.owner_user_id = u_owner.id
                 {where_clause}
+                -- Önce incelenmemişler, sonra yeniler gelsin
                 ORDER BY r.is_reviewed ASC, r.created_at DESC
             """
             
@@ -788,47 +1078,30 @@ def get_all_reports():
 @require_admin
 def get_reports_stats():
     """
-    Get reports statistics including review status.
+    Get simplified report statistics.
+    Returns only: total, reviewed, unreviewed.
     """
     try:
         with current_app.engine.connect() as conn:
-            # Total reports
+            # 1. Toplam Rapor Sayısı
             total_reports = conn.execute(
                 text("SELECT COUNT(*) FROM reports")
             ).scalar()
             
-            # Pending reports
-            pending_reports = conn.execute(
-                text("SELECT COUNT(*) FROM reports WHERE status='PENDING'")
-            ).scalar()
-            
-            # Accepted reports
-            accepted_reports = conn.execute(
-                text("SELECT COUNT(*) FROM reports WHERE status='ACCEPTED'")
-            ).scalar()
-            
-            # Rejected reports
-            rejected_reports = conn.execute(
-                text("SELECT COUNT(*) FROM reports WHERE status='REJECTED'")
-            ).scalar()
-            
-            # Unreviewed reports
-            unreviewed_reports = conn.execute(
-                text("SELECT COUNT(*) FROM reports WHERE is_reviewed = FALSE")
-            ).scalar()
-            
-            # Reviewed reports
+            # 2. İncelenmiş (Reviewed) Sayısı
             reviewed_reports = conn.execute(
                 text("SELECT COUNT(*) FROM reports WHERE is_reviewed = TRUE")
             ).scalar()
             
+            # 3. İncelenmemiş (Unreviewed) Sayısı
+            unreviewed_reports = conn.execute(
+                text("SELECT COUNT(*) FROM reports WHERE is_reviewed = FALSE")
+            ).scalar()
+            
             return jsonify({
                 "total_reports": total_reports,
-                "pending_reports": pending_reports,
-                "accepted_reports": accepted_reports,
-                "rejected_reports": rejected_reports,
-                "unreviewed_reports": unreviewed_reports,
-                "reviewed_reports": reviewed_reports
+                "reviewed_reports": reviewed_reports,
+                "unreviewed_reports": unreviewed_reports
             })
     
     except Exception as e:
