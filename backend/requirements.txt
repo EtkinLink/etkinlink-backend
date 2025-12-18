@@ -10,3 +10,4 @@ Werkzeug==3.0.1
 Flask-Mail==0.9.1
 blinker==1.7.0
 requests
+openai>=1.0.0
