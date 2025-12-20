@@ -102,8 +102,6 @@ CREATE TABLE events (
     reviewed_at              DATETIME NULL,
 
     admin_note               TEXT NULL,
-    reviewed_at              DATETIME NULL,
-    reviewed_by              INT NULL,
 
     user_limit               INT UNSIGNED,
     latitude                 DECIMAL(9,6),
@@ -739,7 +737,7 @@ VALUES
 
   (10, 'ORGANIZATION', 5, 'Hack the Future', 'Hacettepe Coding Society annual hackathon', 1, 0,
    '2025-10-25 09:00:00', '2025-10-27 18:00:00', 'Hacettepe University Tech Center', NULL,
-   'FUTURE', 250, 39.9331, 32.8596, NOW(), NOW()),
+   'FUTURE', 250, 39.9331, 32.8596, NOW(), NOW());
   
 
 INSERT INTO organization_members (organization_id, user_id, role, joined_at)
