@@ -148,6 +148,7 @@ def get_all_events():
                 SELECT 
                     e.id,
                     e.title,
+                    e.explanation,
                     e.owner_type,
                     e.starts_at as date,
                     e.status,
@@ -209,6 +210,10 @@ def get_event_details_for_admin(event_id):
                     et.code AS event_type,
                     COALESCE(o.name, u.username) as owner_name,
                     u.email as owner_email
+                    e.review_reason,
+                    e.review_flags,
+                    e.review_source
+
                 FROM events e
                 LEFT JOIN users u ON e.owner_user_id = u.id
                 LEFT JOIN organizations o ON e.owner_organization_id = o.id
@@ -1194,4 +1199,74 @@ def mark_report_reviewed(report_id):
     
     except Exception as e:
         return {"error": str(e)}, 503
+@admin_bp.put("/events/<int:event_id>/review")
+@require_admin
+def review_event(event_id):
+    """
+    Approve or reject an event that is pending AI review.
 
+    Body:
+    {
+      "status": "APPROVED" | "REJECTED",
+      "admin_note": "Optional explanation"
+    }
+    """
+    try:
+        # JWT doğrula (require_admin sadece yetki kontrolü yapıyor)
+        from backend.utils.auth_utils import verify_jwt
+        admin_user_id = verify_jwt()
+
+        data = request.get_json()
+        decision = data.get("status")
+        admin_note = data.get("admin_note")
+
+        if decision not in ["APPROVED", "REJECTED"]:
+            return {"error": "status must be APPROVED or REJECTED"}, 400
+
+        with current_app.engine.connect() as conn:
+            event = conn.execute(
+                text("""
+                    SELECT status
+                    FROM events
+                    WHERE id = :id
+                """),
+                {"id": event_id}
+            ).fetchone()
+
+            if not event:
+                return {"error": "Event not found"}, 404
+
+            if event.status != "PENDING_REVIEW":
+                return {"error": "Event is not pending review"}, 409
+
+            new_status = "FUTURE" if decision == "APPROVED" else "REJECTED"
+
+            conn.execute(
+                text("""
+                    UPDATE events
+                    SET
+                        status = :status,
+                        admin_note = :admin_note,
+                        reviewed_by = :admin_id,
+                        reviewed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = :id
+                """),
+                {
+                    "status": new_status,
+                    "admin_note": admin_note,
+                    "admin_id": admin_user_id,
+                    "id": event_id
+                }
+            )
+
+            conn.commit()
+
+        return {
+            "message": f"Event {decision.lower()} successfully",
+            "event_id": event_id,
+            "new_status": new_status
+        }, 200
+
+    except Exception as e:
+        return {"error": str(e)}, 503

@@ -68,46 +68,85 @@ CREATE TABLE organizations (
 
 
 CREATE TABLE events (
-  id                      BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-  owner_user_id           BIGINT UNSIGNED NOT NULL,  
-  owner_type              ENUM('USER', 'ORGANIZATION') NOT NULL DEFAULT 'USER',
-  owner_organization_id   BIGINT UNSIGNED NULL,
-  title                   VARCHAR(200) NOT NULL,
-  explanation             TEXT NOT NULL,
-  type_id                 BIGINT UNSIGNED,
-  has_register            BOOLEAN NOT NULL DEFAULT 1,               
-  price                   DECIMAL(10,2) NOT NULL,
-  starts_at               DATETIME NOT NULL,
-  ends_at                 DATETIME,
-  location_name           VARCHAR(500),
-  photo_url               VARCHAR(500),
-  status                  ENUM('FUTURE','COMPLETED') NOT NULL DEFAULT 'FUTURE',
-  user_limit              INT UNSIGNED,              
-  latitude                DECIMAL(9,6),
-  longitude               DECIMAL(9,6),
-  created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_participants_private BOOLEAN NOT NULL DEFAULT 0,
-  only_girls              BOOLEAN NOT NULL DEFAULT 0,
-                          
+    id                       BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
 
-  CONSTRAINT fk_events_owner_user
-    FOREIGN KEY (owner_user_id) REFERENCES users(id)
-      ON UPDATE CASCADE ON DELETE RESTRICT,
+    owner_user_id            BIGINT UNSIGNED NOT NULL,
+    owner_type               ENUM('USER', 'ORGANIZATION') NOT NULL DEFAULT 'USER',
+    owner_organization_id    BIGINT UNSIGNED NULL,
 
-  CONSTRAINT fk_events_owner_org
-    FOREIGN KEY (owner_organization_id) REFERENCES organizations(id)
-      ON UPDATE CASCADE ON DELETE SET NULL,
+    title                    VARCHAR(200) NOT NULL,
+    explanation              TEXT NOT NULL,
 
-  CONSTRAINT fk_events_type
-     FOREIGN KEY (type_id) REFERENCES event_types(id)
-       ON UPDATE CASCADE ON DELETE SET NULL,
+    type_id                  BIGINT UNSIGNED,
+    has_register             BOOLEAN NOT NULL DEFAULT 1,
+    price                    DECIMAL(10,2) NOT NULL,
 
-  INDEX idx_events_owner_user (owner_user_id),
-  INDEX idx_events_owner_org (owner_organization_id),
-  INDEX idx_events_starts_at (starts_at),
-  INDEX idx_events_status (status)
+    starts_at                DATETIME NOT NULL,
+    ends_at                  DATETIME,
+
+    location_name            VARCHAR(500),
+    photo_url                VARCHAR(500),
+
+    status                   ENUM(
+                                 'DRAFT',
+                                 'PENDING_REVIEW',
+                                 'FUTURE',
+                                 'COMPLETED',
+                                 'REJECTED'
+                             ) NOT NULL DEFAULT 'DRAFT',
+
+    review_reason            TEXT NULL,
+    review_flags             JSON NULL,
+    review_source            ENUM('AI','ADMIN') NULL,
+    reviewed_by              BIGINT UNSIGNED NULL,
+    reviewed_at              DATETIME NULL,
+
+    admin_note               TEXT NULL,
+    reviewed_at              DATETIME NULL,
+    reviewed_by              INT NULL,
+
+    user_limit               INT UNSIGNED,
+    latitude                 DECIMAL(9,6),
+    longitude                DECIMAL(9,6),
+
+    created_at               DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at               DATETIME DEFAULT CURRENT_TIMESTAMP
+                             ON UPDATE CURRENT_TIMESTAMP,
+
+    is_participants_private  BOOLEAN NOT NULL DEFAULT 0,
+    only_girls               BOOLEAN NOT NULL DEFAULT 0,
+
+    CONSTRAINT fk_events_owner_user
+        FOREIGN KEY (owner_user_id)
+        REFERENCES users(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_events_owner_org
+        FOREIGN KEY (owner_organization_id)
+        REFERENCES organizations(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_events_type
+        FOREIGN KEY (type_id)
+        REFERENCES event_types(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_events_reviewed_by
+        FOREIGN KEY (reviewed_by)
+        REFERENCES users(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    INDEX idx_events_owner_user (owner_user_id),
+    INDEX idx_events_owner_org  (owner_organization_id),
+    INDEX idx_events_starts_at  (starts_at),
+    INDEX idx_events_status     (status)
+
 ) ENGINE=InnoDB;
+
 
 CREATE TABLE applications (
   id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,

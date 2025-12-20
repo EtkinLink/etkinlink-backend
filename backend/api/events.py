@@ -5,8 +5,11 @@ from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import text
 from backend.utils.auth_utils import verify_jwt, check_event_ownership, check_organization_permission, AuthError
 from backend.utils.pagination import paginate_query
+from backend.utils.event_moderation import review_event_content
 from datetime import datetime
 import uuid
+import json
+
 
 events_bp = Blueprint('events', __name__, url_prefix='/events')
 
@@ -458,82 +461,167 @@ def get_event_ratings(event_id):
         return {"error": str(e)}, 503
 
 
-
 @events_bp.post("/")
 def create_event():
     """
     Create a new event (owned by a user or an organization).
-    Requires a valid JWT token.
+
+    Flow:
+    - Validate request payload
+    - Check ownership / organization permissions
+    - Run AI content review (title + explanation)
+    - Decide initial event status
+        - FUTURE: safe content, publish immediately
+        - PENDING_REVIEW: risky content, requires admin approval
+    - Insert event into database
     """
     try:
         user_id = verify_jwt()
 
         data = request.get_json()
-        required_fields = ["title", "explanation", "type_id", "starts_at", "ends_at", "owner_type","has_register"]
+        if not data:
+            return {"error": "Request body is required"}, 400
+
+        required_fields = [
+            "title",
+            "explanation",
+            "type_id",
+            "starts_at",
+            "ends_at",
+            "owner_type",
+            "has_register"
+        ]
+
         missing = [f for f in required_fields if f not in data]
         if missing:
-            return {"error": f"Missing required fields: {', '.join(missing)}"}, 400
+            return {
+                "error": f"Missing required fields: {', '.join(missing)}"
+            }, 400
 
         owner_type = data.get("owner_type", "USER").upper()
         org_id = data.get("organization_id") if owner_type == "ORGANIZATION" else None
-        
-        # get privacy settings -> default False/Public
-        is_participants_private = data.get("is_participants_private", False)
+
+        # Privacy flags
+        is_participants_private = bool(data.get("is_participants_private", False))
         only_girls = bool(data.get("only_girls", False))
 
-        # If organization, check if user is admin/member of it
+        # Organization permission check
         if owner_type == "ORGANIZATION":
             with current_app.engine.connect() as conn:
-                check_organization_permission(conn, org_id, user_id, ["ADMIN", "REPRESENTATIVE"])
-
-        with current_app.engine.connect() as conn:
-            query = text("""
-                INSERT INTO events (
-                    owner_user_id, owner_type, owner_organization_id,
-                    title, explanation, type_id, price, has_register,
-                    starts_at, ends_at, location_name, photo_url,
-                    status, user_limit, latitude, longitude, 
-                    is_participants_private,only_girls,
-                    created_at, updated_at
+                check_organization_permission(
+                    conn,
+                    org_id,
+                    user_id,
+                    ["ADMIN", "REPRESENTATIVE"]
                 )
-                VALUES (
-                    :owner_user_id, :owner_type, :owner_organization_id,
-                    :title, :explanation, :type_id, :price, :has_register,
-                    :starts_at, :ends_at, :location_name, :photo_url,
-                    'FUTURE', :user_limit, :latitude, :longitude, 
-                    :is_participants_private,:only_girls,
-                    NOW(), NOW()
-                )
-            """)
 
-            conn.execute(query, {
-                "owner_user_id": user_id,
-                "owner_type": owner_type,
-                "owner_organization_id": org_id,
-                "title": data.get("title"),
-                "explanation": data.get("explanation"),
-                "type_id": data.get("type_id"),
-                "price": data.get("price", 0),
-                "has_register": data.get("has_register"),
-                "starts_at": data.get("starts_at"),
-                "ends_at": data.get("ends_at"),
-                "location_name": data.get("location_name"),
-                "photo_url": data.get("photo_url"),
-                "user_limit": data.get("user_limit"),
-                "latitude": data.get("latitude"),
-                "longitude": data.get("longitude"),
-                "is_participants_private": is_participants_private ,
-                "only_girls": only_girls
-            })
-            conn.commit()
+        # Run AI moderation
+        review_result = review_event_content(
+            title=data.get("title"),
+            description=data.get("explanation")
+        )
 
-        return {"message": "Event created successfully"}, 201
+        if review_result.get("is_safe") is True:
+            event_status = "FUTURE"
+            review_reason = None
+            review_flags = None
+            review_source = None
+        else:
+            event_status = "PENDING_REVIEW"
+            review_reason = review_result.get("reason")
+            review_flags = review_result.get("flags")
+            review_source = "AI"
+
+        # Insert event with transaction
+        with current_app.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO events (
+                        owner_user_id,
+                        owner_type,
+                        owner_organization_id,
+                        title,
+                        explanation,
+                        type_id,
+                        price,
+                        has_register,
+                        starts_at,
+                        ends_at,
+                        location_name,
+                        photo_url,
+                        status,
+                        review_reason,
+                        review_flags,
+                        review_source,
+                        user_limit,
+                        latitude,
+                        longitude,
+                        is_participants_private,
+                        only_girls,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        :owner_user_id,
+                        :owner_type,
+                        :owner_organization_id,
+                        :title,
+                        :explanation,
+                        :type_id,
+                        :price,
+                        :has_register,
+                        :starts_at,
+                        :ends_at,
+                        :location_name,
+                        :photo_url,
+                        :status,
+                        :review_reason,
+                        :review_flags,
+                        :review_source,
+                        :user_limit,
+                        :latitude,
+                        :longitude,
+                        :is_participants_private,
+                        :only_girls,
+                        NOW(),
+                        NOW()
+                    )
+                """),
+                {
+                    "owner_user_id": user_id,
+                    "owner_type": owner_type,
+                    "owner_organization_id": org_id,
+                    "title": data.get("title"),
+                    "explanation": data.get("explanation"),
+                    "type_id": data.get("type_id"),
+                    "price": data.get("price", 0),
+                    "has_register": data.get("has_register"),
+                    "starts_at": data.get("starts_at"),
+                    "ends_at": data.get("ends_at"),
+                    "location_name": data.get("location_name"),
+                    "photo_url": data.get("photo_url"),
+                    "status": event_status,
+                    "review_reason": review_reason,
+                    "review_flags": json.dumps(review_flags) if review_flags else None,
+                    "review_source": review_source,
+                    "user_limit": data.get("user_limit"),
+                    "latitude": data.get("latitude"),
+                    "longitude": data.get("longitude"),
+                    "is_participants_private": is_participants_private,
+                    "only_girls": only_girls
+                }
+            )
+
+        return {
+            "message": "Event created successfully",
+            "status": event_status
+        }, 201
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": str(e)}, 503
-
+    
 
 
 @events_bp.post("/<int:event_id>/check-in")
@@ -671,67 +759,73 @@ def manual_check_in_participant(event_id):
 @events_bp.get("/")
 def get_events():
     """
-    Returns all events (user or organization owned) with type, owner info, and participant count.
-    Supports pagination with ?page=1&per_page=20 parameters.
+    Returns all public events.
+    Only events with status = FUTURE are visible to users.
+    Supports pagination with ?page=1&per_page=20
     """
     try:
         with current_app.engine.connect() as conn:
             base_query = """
-                SELECT 
-                    e.id,
-                    e.title,
-                    e.explanation,
-                    e.price,
-                    e.starts_at,
-                    e.ends_at,
-                    e.location_name,
-                    e.status,
-                    e.user_limit,
-                    e.latitude,
-                    e.longitude,
-                    e.created_at,
-                    e.updated_at,
-                    e.only_girls,
-                    e.owner_type,
-                    u.username AS owner_username,
-                    o.name AS owner_organization_name,
-                    et.code AS event_type,
-                    (
-                        SELECT COUNT(*) FROM participants p
-                        WHERE p.event_id = e.id
-                    ) AS participant_count
-                FROM events e
-                LEFT JOIN users u ON e.owner_user_id = u.id
-                LEFT JOIN organizations o ON e.owner_organization_id = o.id
-                LEFT JOIN event_types et ON e.type_id = et.id
-                ORDER BY e.starts_at ASC
+            SELECT
+                e.id,
+                e.title,
+                e.explanation,
+                e.price,
+                e.starts_at,
+                e.ends_at,
+                e.location_name,
+                e.status,
+                e.user_limit,
+                e.latitude,
+                e.longitude,
+                e.created_at,
+                e.updated_at,
+                e.only_girls,
+                e.owner_type,
+                u.username AS owner_username,
+                o.name AS owner_organization_name,
+                et.code AS event_type,
+                (
+                    SELECT COUNT(*)
+                    FROM participants p
+                    WHERE p.event_id = e.id
+                ) AS participant_count
+            FROM events e
+            LEFT JOIN users u ON e.owner_user_id = u.id
+            LEFT JOIN organizations o ON e.owner_organization_id = o.id
+            LEFT JOIN event_types et ON e.type_id = et.id
+            WHERE e.status = 'FUTURE'
+            ORDER BY e.starts_at ASC
             """
-            
+
             count_query = """
-                SELECT COUNT(*) 
-                FROM events e
+            SELECT COUNT(*)
+            FROM events e
+            WHERE e.status = 'FUTURE'
             """
-            
+
             result = paginate_query(conn, base_query, count_query)
             return jsonify(result)
-            
+
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 @events_bp.get("/<int:event_id>")
 def get_event_by_id(event_id):
     """
-    Event detaylarını döndürür.
-    Katılımcılar gizliyse owner dışında kimse göremez.
-    Eğer status = 'COMPLETED' ise ratingler de döner.
+    Returns event details.
+
+    Rules:
+    - Only FUTURE events are visible to regular users
+    - PENDING_REVIEW / REJECTED events are visible only to owner or admins
+    - If event is COMPLETED, ratings are included
     """
     try:
         user_id = verify_jwt()
 
         with current_app.engine.connect() as conn:
             event = conn.execute(text("""
-                SELECT 
+                SELECT
                     e.id,
                     e.title,
                     e.explanation,
@@ -749,8 +843,8 @@ def get_event_by_id(event_id):
                     e.has_register,
                     e.owner_organization_id,
                     e.only_girls,
-                    e.owner_user_id,          -- Auth kontrolü için gerekli
-                    e.is_participants_private,-- Kontrol bayrağı
+                    e.owner_user_id,
+                    e.is_participants_private,
                     u.username AS owner_username,
                     o.name AS owner_organization_name,
                     et.code AS event_type
@@ -764,31 +858,44 @@ def get_event_by_id(event_id):
             if not event:
                 return {"error": "Event not found"}, 404
 
-            # 👇 Sadece status'e bakıyoruz
+            # --------------------------------------------------
+            # VISIBILITY CHECK (AI REVIEW)
+            # --------------------------------------------------
+            is_owner = False
+
+            if event.owner_type == "USER" and user_id == event.owner_user_id:
+                is_owner = True
+
+            elif event.owner_type == "ORGANIZATION" and event.owner_organization_id:
+                org_member = conn.execute(text("""
+                    SELECT role
+                    FROM organization_members
+                    WHERE organization_id = :oid AND user_id = :uid
+                """), {
+                    "oid": event.owner_organization_id,
+                    "uid": user_id
+                }).fetchone()
+
+                if org_member and org_member.role in ["ADMIN", "REPRESENTATIVE"]:
+                    is_owner = True
+
+            if event.status in ["PENDING_REVIEW", "REJECTED"] and not is_owner:
+                return {"error": "Event not available"}, 404
+
             is_finished = (event.status == "COMPLETED")
 
-            # ----- Katılımcı gizliliği -----
+            # --------------------------------------------------
+            # PARTICIPANT VISIBILITY
+            # --------------------------------------------------
             show_participants = True
-            
-            if event.is_participants_private:
+
+            if event.is_participants_private and not is_owner:
                 show_participants = False
-                
-                if event.owner_type == 'USER' and user_id == event.owner_user_id:
-                    show_participants = True
-                
-                elif event.owner_type == 'ORGANIZATION' and user_id:
-                    org_member = conn.execute(text("""
-                        SELECT role FROM organization_members 
-                        WHERE organization_id = :oid AND user_id = :uid
-                    """), {"oid": event.owner_organization_id, "uid": user_id}).fetchone()
-                    
-                    if org_member and org_member.role in ['ADMIN', 'REPRESENTATIVE']:
-                        show_participants = True
 
             participants = []
             if show_participants:
                 participants = conn.execute(text("""
-                    SELECT 
+                    SELECT
                         u.id,
                         u.username,
                         p.status
@@ -798,9 +905,9 @@ def get_event_by_id(event_id):
                 """), {"id": event_id}).fetchall()
 
             applications = []
-            if show_participants and event.owner_type == "ORGANIZATION" and event.owner_organization_id:
+            if show_participants and event.owner_type == "ORGANIZATION":
                 applications = conn.execute(text("""
-                    SELECT 
+                    SELECT
                         a.id,
                         a.user_id,
                         u.username,
@@ -813,22 +920,21 @@ def get_event_by_id(event_id):
                     ORDER BY a.created_at DESC
                 """), {"org_id": event.owner_organization_id}).fetchall()
 
-            #  Eğer COMPLETED ise ratingleri çek
+            # --------------------------------------------------
+            # RATINGS (ONLY IF COMPLETED)
+            # --------------------------------------------------
             ratings_summary = None
             if is_finished:
-                agg_row = conn.execute(text("""
-                    SELECT 
+                agg = conn.execute(text("""
+                    SELECT
                         AVG(rating) AS avg_rating,
                         COUNT(*) AS rating_count
                     FROM ratings
                     WHERE event_id = :eid
                 """), {"eid": event_id}).fetchone()
 
-                avg_rating = float(agg_row.avg_rating) if agg_row.avg_rating is not None else None
-                rating_count = int(agg_row.rating_count) if agg_row.rating_count else 0
-
                 rating_rows = conn.execute(text("""
-                    SELECT 
+                    SELECT
                         u.username,
                         r.rating,
                         r.comment
@@ -838,37 +944,34 @@ def get_event_by_id(event_id):
                     ORDER BY r.id ASC
                 """), {"eid": event_id}).fetchall()
 
-                ratings_list = [
-                    {
-                        "username": row.username,
-                        "rating": int(row.rating),
-                        "comment": row.comment
-                    }
-                    for row in rating_rows
-                ]
-
                 ratings_summary = {
-                    "average_rating": avg_rating,
-                    "rating_count": rating_count,
-                    "ratings": ratings_list
+                    "average_rating": float(agg.avg_rating) if agg.avg_rating else None,
+                    "rating_count": int(agg.rating_count),
+                    "ratings": [
+                        {
+                            "username": r.username,
+                            "rating": int(r.rating),
+                            "comment": r.comment
+                        }
+                        for r in rating_rows
+                    ]
                 }
 
-        # ----- Response’u paketle -----
-        event_data = dict(event._mapping)
-        event_data["is_participants_private"] = bool(event.is_participants_private)
-        event_data["only_girls"] = bool(event.only_girls)
+            # --------------------------------------------------
+            # RESPONSE
+            # --------------------------------------------------
+            event_data = dict(event._mapping)
+            event_data["is_participants_private"] = bool(event.is_participants_private)
+            event_data["only_girls"] = bool(event.only_girls)
+            event_data["participants"] = (
+                [dict(p._mapping) for p in participants] if show_participants else None
+            )
+            event_data["applications"] = (
+                [dict(a._mapping) for a in applications] if show_participants else []
+            )
+            event_data["ratings"] = ratings_summary if is_finished else None
 
-        if not show_participants:
-            event_data["participants"] = None
-            event_data["applications"] = []
-        else:
-            event_data["participants"] = [dict(p._mapping) for p in participants]
-            event_data["applications"] = [dict(a._mapping) for a in applications]
-
-        # SADECE COMPLETED ise rating var, değilse null
-        event_data["ratings"] = ratings_summary if is_finished else None
-
-        return jsonify(event_data)
+            return jsonify(event_data)
 
     except Exception as e:
         return {"error": str(e)}, 503
