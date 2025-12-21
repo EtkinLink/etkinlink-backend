@@ -490,3 +490,102 @@ def remove_member(org_id, target_user_id):
         return {"error": "Invalid token."}, 401
     except Exception as e:
         return {"error": f"Internal server error: {str(e)}"}, 500
+
+
+@organization_bp.post("/<int:org_id>/report")
+def report_organization(org_id):
+    """
+    Report an organization for inappropriate content.
+    Body: {"reason": "This organization contains spam"}
+    """
+    try:
+        user_id = verify_jwt()
+        data = request.get_json()
+        reason = data.get("reason", "").strip()
+        
+        if not reason:
+            return {"error": "Reason is required"}, 400
+        
+        if len(reason) < 10:
+            return {"error": "Reason must be at least 10 characters"}, 400
+        
+        with current_app.engine.connect() as conn:
+            # Check if organization exists
+            org = conn.execute(
+                text("SELECT id FROM organizations WHERE id = :id"),
+                {"id": org_id}
+            ).fetchone()
+            
+            if not org:
+                return {"error": "Organization not found"}, 404
+            
+            # Check if user already reported this organization
+            existing = conn.execute(
+                text("""
+                    SELECT id FROM reports 
+                    WHERE organization_id = :oid AND reporter_user_id = :uid
+                """),
+                {"oid": org_id, "uid": user_id}
+            ).fetchone()
+            
+            if existing:
+                return {"error": "You have already reported this organization"}, 409
+            
+            # Create report
+            conn.execute(
+                text("""
+                    INSERT INTO reports (organization_id, reporter_user_id, reason, status, created_at)
+                    VALUES (:oid, :uid, :reason, 'PENDING', NOW())
+                """),
+                {"oid": org_id, "uid": user_id, "reason": reason}
+            )
+            conn.commit()
+        
+        return {"message": "Report submitted successfully"}, 201
+    
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@organization_bp.get("/my-reports")
+def get_my_organization_reports():
+    """
+    Get current user's organization reports.
+    Query params: ?page=1&per_page=20
+    """
+    try:
+        user_id = verify_jwt()
+        
+        with current_app.engine.connect() as conn:
+            base_query = """
+                SELECT 
+                    r.id,
+                    r.organization_id,
+                    o.name as organization_name,
+                    r.reason,
+                    r.status,
+                    r.admin_notes,
+                    r.created_at,
+                    r.updated_at
+                FROM reports r
+                JOIN organizations o ON r.organization_id = o.id
+                WHERE r.reporter_user_id = :uid
+                ORDER BY r.created_at DESC
+            """
+            
+            count_query = """
+                SELECT COUNT(*) 
+                FROM reports
+                WHERE reporter_user_id = :uid AND organization_id IS NOT NULL
+            """
+            
+            params = {"uid": user_id}
+            result = paginate_query(conn, base_query, count_query, params)
+            return jsonify(result)
+    
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": str(e)}, 503

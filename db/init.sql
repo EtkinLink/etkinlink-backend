@@ -245,24 +245,35 @@ CREATE TABLE organization_applications (
 ) ENGINE=InnoDB;
 
 CREATE TABLE reports (
-  id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-  event_id        BIGINT UNSIGNED NOT NULL,
-  reporter_user_id BIGINT UNSIGNED NOT NULL,
-  reason          TEXT NOT NULL,
-  status          ENUM('PENDING','ACCEPTED','REJECTED') DEFAULT 'PENDING',
-  is_reviewed     BOOLEAN DEFAULT FALSE,
-  admin_notes     TEXT,
-  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  id                BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  event_id          BIGINT UNSIGNED NULL,
+  organization_id   BIGINT UNSIGNED NULL,
+  reporter_user_id  BIGINT UNSIGNED NOT NULL,
+  reason            TEXT NOT NULL,
+  status            ENUM('PENDING','ACCEPTED','REJECTED') DEFAULT 'PENDING',
+  is_reviewed       BOOLEAN DEFAULT FALSE,
+  admin_notes       TEXT,
+  created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
   CONSTRAINT fk_reports_event FOREIGN KEY (event_id) REFERENCES events(id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_reports_organization FOREIGN KEY (organization_id) REFERENCES organizations(id)
     ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_reports_user FOREIGN KEY (reporter_user_id) REFERENCES users(id)
     ON UPDATE CASCADE ON DELETE CASCADE,
     
+  -- Ensure either event_id or organization_id is set, but not both
+  CONSTRAINT chk_reports_target CHECK (
+    (event_id IS NOT NULL AND organization_id IS NULL) OR
+    (event_id IS NULL AND organization_id IS NOT NULL)
+  ),
+    
   INDEX idx_reports_status (status),
   INDEX idx_reports_is_reviewed (is_reviewed),
-  INDEX idx_reports_created (created_at)
+  INDEX idx_reports_created (created_at),
+  INDEX idx_reports_event (event_id),
+  INDEX idx_reports_organization (organization_id)
 ) ENGINE=InnoDB;
 
 
