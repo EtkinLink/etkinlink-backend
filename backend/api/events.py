@@ -256,17 +256,23 @@ def get_event_applications(event_id):
                 return {"error": auth_err.args[0]}, auth_err.code
 
             base_query = """
-                SELECT 
+                SELECT
                     a.id AS application_id,
                     a.user_id,
                     u.username,
                     u.name AS user_name,
                     a.why_me,
-                    a.status
+                    a.status,
+                    p.id AS participant_id,
+                    p.status AS participant_status
                 FROM applications a
                 JOIN users u ON a.user_id = u.id
+                LEFT JOIN participants p
+                    ON p.event_id = a.event_id
+                AND p.user_id = a.user_id
                 WHERE a.event_id = :eid
                 ORDER BY a.status ASC, a.id DESC
+
             """
             
             count_query = """

@@ -209,7 +209,7 @@ def get_event_details_for_admin(event_id):
                     e.only_girls,
                     et.code AS event_type,
                     COALESCE(o.name, u.username) as owner_name,
-                    u.email as owner_email
+                    u.email as owner_email,
                     e.review_reason,
                     e.review_flags,
                     e.review_source
