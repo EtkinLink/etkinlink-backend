@@ -712,11 +712,28 @@ def get_club_details(club_id):
                 WHERE e.owner_organization_id = :id
                 ORDER BY e.starts_at DESC
             """), {"id": club_id}).fetchall()
+
+            # 4. Kulüp Hakkındaki Raporlar
+            reports = conn.execute(text("""
+                SELECT 
+                    r.id,
+                    u.username as reporter,
+                    r.reason,
+                    r.status,
+                    r.is_reviewed,
+                    r.admin_notes,
+                    r.created_at
+                FROM reports r
+                JOIN users u ON r.reporter_user_id = u.id
+                WHERE r.organization_id = :id
+                ORDER BY r.created_at DESC
+            """), {"id": club_id}).fetchall()
             
             # Response Hazırlama
             data = dict(club._mapping)
             data["members"] = [dict(m._mapping) for m in members]
             data["events"] = [dict(e._mapping) for e in events]
+            data["reports"] = [dict(r._mapping) for r in reports]
 
             return jsonify(data)
 
@@ -1016,16 +1033,19 @@ def get_attendance_charts():
 @require_admin
 def get_all_reports():
     """
-    Get reports filtered by review status.
+    Get reports filtered by review status and type.
     Query params: 
       - ?page=1&per_page=20
       - ?status=REVIEWED    -> Returns is_reviewed = TRUE
       - ?status=UNREVIEWED  -> Returns is_reviewed = FALSE
-      - (No status)         -> Returns ALL
+      - ?type=EVENT         -> Returns only event reports
+      - ?type=ORGANIZATION  -> Returns only organization reports
+      - (No status/type)    -> Returns ALL
     """
     try:
         # Frontend 'status' parametresi ile 'REVIEWED' veya 'UNREVIEWED' gönderecek
         status_filter = request.args.get("status", "").upper()
+        type_filter = request.args.get("type", "").upper()
         pagination_params = get_pagination_params()
         
         with current_app.engine.connect() as conn:
@@ -1038,6 +1058,12 @@ def get_all_reports():
             elif status_filter == "UNREVIEWED":
                 where_clauses.append("r.is_reviewed = FALSE")
             
+            # Report type filtresi
+            if type_filter == "EVENT":
+                where_clauses.append("r.event_id IS NOT NULL")
+            elif type_filter == "ORGANIZATION":
+                where_clauses.append("r.organization_id IS NOT NULL")
+            
             where_clause = ""
             if where_clauses:
                 where_clause = "WHERE " + " AND ".join(where_clauses)
@@ -1046,23 +1072,38 @@ def get_all_reports():
                 SELECT 
                     r.id,
                     r.event_id,
-                    e.title as event_title,
-                    e.owner_type,
-                    COALESCE(o.name, u_owner.username) as event_owner,
+                    r.organization_id,
+                    CASE 
+                        WHEN r.event_id IS NOT NULL THEN 'EVENT'
+                        WHEN r.organization_id IS NOT NULL THEN 'ORGANIZATION'
+                    END as report_type,
+                    CASE 
+                        WHEN r.event_id IS NOT NULL THEN e.title
+                        WHEN r.organization_id IS NOT NULL THEN org.name
+                    END as target_name,
+                    CASE 
+                        WHEN r.event_id IS NOT NULL THEN e.owner_type
+                        WHEN r.organization_id IS NOT NULL THEN 'ORGANIZATION'
+                    END as target_owner_type,
+                    CASE 
+                        WHEN r.event_id IS NOT NULL THEN COALESCE(o.name, u_owner.username)
+                        WHEN r.organization_id IS NOT NULL THEN u_org_owner.username
+                    END as target_owner,
                     u_reporter.username as reporter_username,
                     r.reason,
-                    r.status AS decision, -- (ACCEPTED/REJECTED/PENDING) Karar sonucu olarak döner
+                    r.status AS decision,
                     r.is_reviewed,
                     r.admin_notes,
                     r.created_at,
                     r.updated_at
                 FROM reports r
-                JOIN events e ON r.event_id = e.id
+                LEFT JOIN events e ON r.event_id = e.id
+                LEFT JOIN organizations org ON r.organization_id = org.id
                 JOIN users u_reporter ON r.reporter_user_id = u_reporter.id
                 LEFT JOIN organizations o ON e.owner_organization_id = o.id
                 LEFT JOIN users u_owner ON e.owner_user_id = u_owner.id
+                LEFT JOIN users u_org_owner ON org.owner_user_id = u_org_owner.id
                 {where_clause}
-                -- Önce incelenmemişler, sonra yeniler gelsin
                 ORDER BY r.is_reviewed ASC, r.created_at DESC
             """
             
@@ -1083,8 +1124,8 @@ def get_all_reports():
 @require_admin
 def get_reports_stats():
     """
-    Get simplified report statistics.
-    Returns only: total, reviewed, unreviewed.
+    Get comprehensive report statistics.
+    Returns: total, reviewed, unreviewed, and breakdown by type.
     """
     try:
         with current_app.engine.connect() as conn:
@@ -1103,10 +1144,22 @@ def get_reports_stats():
                 text("SELECT COUNT(*) FROM reports WHERE is_reviewed = FALSE")
             ).scalar()
             
+            # 4. Event Reports
+            event_reports = conn.execute(
+                text("SELECT COUNT(*) FROM reports WHERE event_id IS NOT NULL")
+            ).scalar()
+            
+            # 5. Organization Reports
+            organization_reports = conn.execute(
+                text("SELECT COUNT(*) FROM reports WHERE organization_id IS NOT NULL")
+            ).scalar()
+            
             return jsonify({
                 "total_reports": total_reports,
                 "reviewed_reports": reviewed_reports,
-                "unreviewed_reports": unreviewed_reports
+                "unreviewed_reports": unreviewed_reports,
+                "event_reports": event_reports,
+                "organization_reports": organization_reports
             })
     
     except Exception as e:

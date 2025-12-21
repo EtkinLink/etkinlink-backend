@@ -1245,36 +1245,56 @@ def report_event(event_id):
 @events_bp.get("/my-reports")
 def get_my_reports():
     """
-    Get current user's reports.
-    Query params: ?page=1&per_page=20
+    Get current user's reports (both events and organizations).
+    Query params: ?page=1&per_page=20&type=EVENT|ORGANIZATION
     """
     try:
         user_id = verify_jwt()
+        type_filter = request.args.get("type", "").upper()
         
         with current_app.engine.connect() as conn:
-            base_query = """
+            where_clauses = ["r.reporter_user_id = :uid"]
+            params = {"uid": user_id}
+            
+            # Type filter
+            if type_filter == "EVENT":
+                where_clauses.append("r.event_id IS NOT NULL")
+            elif type_filter == "ORGANIZATION":
+                where_clauses.append("r.organization_id IS NOT NULL")
+            
+            where_clause = "WHERE " + " AND ".join(where_clauses)
+            
+            base_query = f"""
                 SELECT 
                     r.id,
                     r.event_id,
-                    e.title as event_title,
+                    r.organization_id,
+                    CASE 
+                        WHEN r.event_id IS NOT NULL THEN 'EVENT'
+                        WHEN r.organization_id IS NOT NULL THEN 'ORGANIZATION'
+                    END as report_type,
+                    CASE 
+                        WHEN r.event_id IS NOT NULL THEN e.title
+                        WHEN r.organization_id IS NOT NULL THEN o.name
+                    END as target_name,
                     r.reason,
                     r.status,
                     r.admin_notes,
                     r.created_at,
                     r.updated_at
                 FROM reports r
-                JOIN events e ON r.event_id = e.id
-                WHERE r.reporter_user_id = :uid
+                LEFT JOIN events e ON r.event_id = e.id
+                LEFT JOIN organizations o ON r.organization_id = o.id
+                {where_clause}
                 ORDER BY r.created_at DESC
             """
             
-            count_query = """
+            count_query = f"""
                 SELECT COUNT(*) 
-                FROM reports 
-                WHERE reporter_user_id = :uid
+                FROM reports r
+                {where_clause}
             """
             
-            params = {"uid": user_id}
             result = paginate_query(conn, base_query, count_query, params)
             return jsonify(result)
     
