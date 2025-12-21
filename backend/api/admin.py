@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy import text
 from backend.utils.auth_utils import require_admin, AuthError
 from backend.utils.pagination import paginate_query, get_pagination_params
+from backend.utils.scheduler import manual_trigger_update, get_scheduler_status
 from datetime import datetime, timedelta
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
@@ -1321,5 +1322,55 @@ def review_event(event_id):
             "new_status": new_status
         }, 200
 
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+# =============================================
+# SCHEDULER MANAGEMENT
+# =============================================
+
+@admin_bp.post("/events/update-statuses")
+@require_admin
+def trigger_event_status_update():
+    """
+    Manuel olarak event status güncelleme işlemini tetikler.
+    Tarihi geçmiş FUTURE event'leri COMPLETED'e çeker.
+    """
+    try:
+        result = manual_trigger_update(current_app.engine)
+        
+        if result["success"]:
+            return jsonify({
+                "message": "Event status update completed successfully",
+                "updated_count": result["updated_count"],
+                "timestamp": result["timestamp"]
+            }), 200
+        else:
+            return jsonify({
+                "error": "Event status update failed",
+                "details": result["errors"],
+                "timestamp": result["timestamp"]
+            }), 500
+            
+    except Exception as e:
+        return {"error": str(e)}, 503
+
+
+@admin_bp.get("/scheduler/status")
+@require_admin
+def get_scheduler_status_endpoint():
+    """
+    Scheduler durumunu ve job bilgilerini döndürür.
+    """
+    try:
+        scheduler = getattr(current_app, '_scheduler', None)
+        status = get_scheduler_status(scheduler)
+        
+        return jsonify({
+            "scheduler": status,
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
     except Exception as e:
         return {"error": str(e)}, 503

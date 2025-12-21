@@ -12,6 +12,7 @@ from backend.utils.mail_service import (
     send_verification_email,
     send_password_reset_email
 )
+from backend.utils.scheduler import init_scheduler
 from backend.config import get_config
 
 from flask import Flask, jsonify, request, Blueprint
@@ -49,6 +50,9 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 # Engine'i app'e ekle ki Blueprint'ler current_app.engine ile erişebilsin
 app.engine = engine
 
+
+app.config['SKIP_SCHEDULER'] = os.getenv('SKIP_SCHEDULER', 'false')
+
 # =============================================
 # Moduler yapinin calismasi icin gerekli kodlar
 # =============================================
@@ -70,6 +74,29 @@ def register_blueprints(app):
 
 # Blueprint keşfini çalıştır
 register_blueprints(app)
+
+# =============================================
+# SCHEDULER INITIALIZATION
+# =============================================
+def init_app_scheduler():
+    """
+    APScheduler'ı başlatır.
+    SKIP_SCHEDULER=true ile devre dışı bırakılabilir.
+    """
+    try:
+        scheduler = init_scheduler(app)
+        if scheduler:
+            app._scheduler = scheduler
+            print("Event Status Scheduler başlatıldı")
+        else:
+            app._scheduler = None
+            print("Event Status Scheduler devre dışı")
+    except Exception as e:
+        print(f"Scheduler başlatılamadı: {str(e)}")
+        app._scheduler = None
+
+# Scheduler'ı başlat
+init_app_scheduler()
 
 
 @app.post("/test-login")
