@@ -291,12 +291,17 @@ def login():
     try:
         with engine.connect() as conn:
             user_row = conn.execute(
-                text("SELECT id, password_hash FROM users WHERE email = :email"),
+                text("SELECT id, password_hash, is_blocked FROM users WHERE email = :email"),
                 {"email": normalized_email}
             ).fetchone()
             if not user_row:
                 return {"error": "No registered account found."}, 401
             user = dict(user_row._mapping)
+            
+            # Check if user is blocked
+            if user.get("is_blocked", False):
+                return {"error": "Account has been blocked. Please contact support."}, 403
+            
             stored_password_hash = user["password_hash"]
             if not check_password_hash(stored_password_hash, password):
                 return {"error": "Incorrect password."}, 401

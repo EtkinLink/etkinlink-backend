@@ -24,7 +24,7 @@ def get_organization_by_id(org_id):
                     u.username AS owner_username
                 FROM organizations o
                 LEFT JOIN users u ON o.owner_user_id = u.id
-                WHERE o.id = :id
+                WHERE o.id = :id AND o.status = 'ACTIVE'
             """), {"id": org_id}).fetchone()
 
             if not org:
@@ -336,12 +336,14 @@ def get_organizations():
                     ) AS member_count
                 FROM organizations o
                 LEFT JOIN users u ON o.owner_user_id = u.id
+                WHERE o.status = 'ACTIVE'
                 ORDER BY o.name ASC
             """
             
             count_query = """
                 SELECT COUNT(*) 
                 FROM organizations o
+                WHERE o.status = 'ACTIVE'
             """
             
             result = paginate_query(conn, base_query, count_query)
@@ -367,6 +369,9 @@ def filter_organizations():
         filters = []
         params = {}
 
+        # Always filter out inactive organizations
+        filters.append("o.status = 'ACTIVE'")
+
         if search:
             filters.append("LOWER(o.name) LIKE LOWER(:search)")
             params["search"] = f"%{search.strip()}%"
@@ -375,7 +380,7 @@ def filter_organizations():
             filters.append("uni.id = :university_id")
             params["university_id"] = int(university)
 
-        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        where_clause = "WHERE " + " AND ".join(filters)
 
         with current_app.engine.connect() as conn:
             base_query = f"""
