@@ -263,12 +263,6 @@ CREATE TABLE reports (
   CONSTRAINT fk_reports_user FOREIGN KEY (reporter_user_id) REFERENCES users(id)
     ON UPDATE CASCADE ON DELETE CASCADE,
     
-  -- Ensure either event_id or organization_id is set, but not both
-  CONSTRAINT chk_reports_target CHECK (
-    (event_id IS NOT NULL AND organization_id IS NULL) OR
-    (event_id IS NULL AND organization_id IS NOT NULL)
-  ),
-    
   INDEX idx_reports_status (status),
   INDEX idx_reports_is_reviewed (is_reviewed),
   INDEX idx_reports_created (created_at),
