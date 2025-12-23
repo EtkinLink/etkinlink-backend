@@ -1,6 +1,3 @@
-
-
-
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import text
 from backend.utils.auth_utils import verify_jwt, check_event_ownership, check_organization_permission, AuthError
@@ -55,9 +52,11 @@ def register_for_event(event_id):
                 text("SELECT id FROM participants WHERE event_id = :eid AND user_id = :uid"),
                 {"eid": event_id, "uid": user_id}
             ).fetchone()
+            
             if is_participant:
                 return {"error": "You are already registered for this event"}, 409
-
+            
+            # Daha önce application yapmış mı?
             has_application = conn.execute(
                 text("SELECT id FROM applications WHERE event_id = :eid AND user_id = :uid"),
                 {"eid": event_id, "uid": user_id}
@@ -103,16 +102,16 @@ def apply_to_event(event_id):
         why_me_text = data.get("why_me") if data else None
 
         with current_app.engine.connect() as conn:
-            
+
             # Güncellenen kısım: Etkinliğin durumunu (status) kontrol et
             event = conn.execute(
                 text("SELECT id, status, only_girls FROM events WHERE id = :eid"),
                 {"eid": event_id}
             ).fetchone()
-            
+
             if not event:
                 return {"error": "Event not found"}, 404
-            
+
             if event.status != 'FUTURE':
                 return {"error": "This event is not active or has already been completed"}, 400
 
@@ -126,7 +125,7 @@ def apply_to_event(event_id):
                 text("SELECT id FROM participants WHERE event_id = :eid AND user_id = :uid"),
                 {"eid": event_id, "uid": user_id}
             ).fetchone()
-            
+
             if is_participant:
                 return {"error": "You are already a participant in this event"}, 409
 
@@ -143,13 +142,13 @@ def apply_to_event(event_id):
                     }
                 )
                 conn.commit()
-            
+
             except Exception as db_error:
                 conn.rollback()
                 error_str = str(db_error).lower()
                 if "duplicate entry" in error_str or "unique constraint failed" in error_str:
                     return {"error": "You have already applied to this event"}, 409
-                
+
                 raise db_error
 
         return {"message": "Application submitted successfully"}, 201
@@ -172,7 +171,7 @@ def manage_event_participation(event_id, target_user_id):
         user_id = verify_jwt()
 
         with current_app.engine.connect() as conn:
-            
+
             participant = conn.execute(text("""
                 SELECT id, status FROM participants
                 WHERE event_id = :eid AND user_id = :uid
@@ -183,11 +182,11 @@ def manage_event_participation(event_id, target_user_id):
                 WHERE event_id = :eid AND user_id = :uid
             """), {"eid": event_id, "uid": target_user_id}).fetchone()
 
-            
+
             if not participant and not application:
                 return {"error": "User is neither a participant nor an applicant for this event."}, 404
 
-            
+
             if user_id == target_user_id:
                 if participant:
                     conn.execute(text("""
@@ -207,7 +206,7 @@ def manage_event_participation(event_id, target_user_id):
 
                 return {"error": "You cannot withdraw after being accepted or rejected."}, 403
 
-            
+
             else:
                 try:
                     check_event_ownership(conn, event_id, user_id)
@@ -249,7 +248,7 @@ def get_event_applications(event_id):
         user_id = verify_jwt()
 
         with current_app.engine.connect() as conn:
-            
+
             try:
                 check_event_ownership(conn, event_id, user_id)
             except AuthError as auth_err:
@@ -274,16 +273,118 @@ def get_event_applications(event_id):
                 ORDER BY a.status ASC, a.id DESC
 
             """
-            
+
             count_query = """
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM applications a
                 WHERE a.event_id = :eid
             """
-            
+
             params = {"eid": event_id}
             result = paginate_query(conn, base_query, count_query, params)
             return jsonify(result)
+
+    except AuthError as e:
+        return {"error": e.args[0]}, e.code
+    except Exception as e:
+        return {"error": f"An error occurred: {str(e)}"}, 503
+
+
+@events_bp.put("/applications/<int:application_id>/status")
+def manage_event_application(application_id):
+    """
+    Approve or reject an event application.
+    Only the event owner (user or org admin/rep) can access this.
+    """
+    try:
+        organizer_user_id = verify_jwt()
+
+        data = request.get_json()
+        new_status = data.get("status", "").upper()
+
+        if new_status not in ["APPROVED", "REJECTED"]:
+            return {"error": "Invalid status. Must be 'APPROVED' or 'REJECTED'"}, 400
+
+        with current_app.engine.connect() as conn:
+
+            application_details = conn.execute(
+                text("""
+                    SELECT
+                        a.event_id,
+                        a.user_id AS applicant_user_id,
+                        a.status AS current_status,
+                        e.user_limit,
+                        e.title AS event_title
+                    FROM applications a
+                    JOIN events e ON a.event_id = e.id
+                    WHERE a.id = :app_id
+                """),
+                {"app_id": application_id}
+            ).fetchone()
+
+            if not application_details:
+                return {"error": "Application not found"}, 404
+
+            if application_details.current_status != 'PENDING':
+                return {"error": "Application has already been processed"}, 409
+
+            try:
+                check_event_ownership(conn, application_details.event_id, organizer_user_id)
+            except AuthError as auth_err:
+                return {"error": auth_err.args[0]}, auth_err.code
+
+            with conn.begin() as trans:
+                if new_status == 'APPROVED':
+
+                    user_limit = application_details.user_limit
+
+                    if user_limit is not None:
+                        current_participant_count = conn.execute(
+                            text("SELECT COUNT(*) FROM participants WHERE event_id = :eid"),
+                            {"eid": application_details.event_id}
+                        ).scalar()
+
+                        if current_participant_count >= user_limit:
+                            trans.rollback()
+                            return {"error": "Event user limit reached. Cannot approve."}, 409
+
+                    ticket_code = str(uuid.uuid4())
+
+                    conn.execute(
+                        text("""
+                            INSERT INTO participants (event_id, user_id, application_id, status, ticket_code)
+                            VALUES (:eid, :uid, :app_id, 'NO_SHOW', :ticket)
+                        """),
+                        {
+                            "eid": application_details.event_id,
+                            "uid": application_details.applicant_user_id,
+                            "app_id": application_id,
+                            "ticket": ticket_code
+                        }
+                    )
+
+                    # Send approval notification
+                    notify_event_approved(
+                        conn=conn,
+                        user_id=application_details.applicant_user_id,
+                        event_title=application_details.event_title,
+                        event_id=application_details.event_id
+                    )
+                else:
+                    # Send rejection notification
+                    notify_event_rejected(
+                        conn=conn,
+                        user_id=application_details.applicant_user_id,
+                        event_title=application_details.event_title,
+                        event_id=application_details.event_id
+                    )
+
+                conn.execute(
+                    text("UPDATE applications SET status = :status WHERE id = :app_id"),
+                    {"status": new_status, "app_id": application_id}
+                )
+
+        return {"message": f"Application {new_status.lower()}"}, 200
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code
@@ -321,7 +422,7 @@ def rate_event(event_id):
             # 1) Kullanıcı bu etkinliğin katılımcısı mı ve ATTENDED mı?
             participant = conn.execute(
                 text("""
-                    SELECT status 
+                    SELECT status
                     FROM participants
                     WHERE event_id = :eid AND user_id = :uid
                 """),
@@ -337,7 +438,7 @@ def rate_event(event_id):
             # 2) Daha önce rating var mı?
             existing = conn.execute(
                 text("""
-                    SELECT id 
+                    SELECT id
                     FROM ratings
                     WHERE event_id = :eid AND user_id = :uid
                 """),
@@ -421,7 +522,7 @@ def get_event_ratings(event_id):
             # Ortalama ve toplam rating
             agg_row = conn.execute(
                 text("""
-                    SELECT 
+                    SELECT
                         AVG(rating) AS avg_rating,
                         COUNT(*) AS rating_count
                     FROM ratings
@@ -439,7 +540,7 @@ def get_event_ratings(event_id):
             # Bütün rating kayıtları (username ile birlikte)
             ratings_rows = conn.execute(
                 text("""
-                    SELECT 
+                    SELECT
                         r.id,
                         u.username,
                         r.rating,
@@ -638,24 +739,24 @@ def check_in_participant(event_id):
     """
     try:
         admin_user_id = verify_jwt()
-        
+
         data = request.get_json()
         if not data or "ticket_code" not in data:
             return {"error": "ticket_code is required"}, 400
-        
+
         ticket_code = data.get("ticket_code")
 
         with current_app.engine.connect() as conn:
-            
+
             try:
                 check_event_ownership(conn, event_id, admin_user_id)
             except AuthError as auth_err:
                 return {"error": auth_err.args[0]}, auth_err.code
 
             with conn.begin() as trans:
-            
+
                 query = text("""
-                    SELECT 
+                    SELECT
                         p.status,
                         u.username,
                         u.name
@@ -664,29 +765,28 @@ def check_in_participant(event_id):
                     WHERE p.ticket_code = :ticket_code AND p.event_id = :event_id
                     FOR UPDATE
                 """)
-                
+
                 participant = conn.execute(query, {
-                    "ticket_code": ticket_code, 
+                    "ticket_code": ticket_code,
                     "event_id": event_id
                 }).fetchone()
 
                 if not participant:
                     return {"error": "Invalid ticket or not for this event"}, 404
-                
+
                 if participant.status == 'ATTENDED':
                     return {"error": f"Ticket already used by {participant.username}"}, 409
-                
+
                 update_query = text("""
-                    UPDATE participants 
-                    SET status = 'ATTENDED' 
+                    UPDATE participants
+                    SET status = 'ATTENDED'
                     WHERE ticket_code = :ticket_code
                 """)
-                
+
                 conn.execute(update_query, {"ticket_code": ticket_code})
 
-
         return {
-            "message": "Check-in successful", 
+            "message": "Check-in successful",
             "username": participant.username,
             "name": participant.name
         }, 200
@@ -1024,9 +1124,9 @@ def filter_events():
         if search:
             # Case-insensitive search across multiple fields including explanation
             filters.append("""(
-                LOWER(e.title) LIKE LOWER(:search) OR 
-                LOWER(e.explanation) LIKE LOWER(:search) OR 
-                LOWER(o.name) LIKE LOWER(:search) OR 
+                LOWER(e.title) LIKE LOWER(:search) OR
+                LOWER(e.explanation) LIKE LOWER(:search) OR
+                LOWER(o.name) LIKE LOWER(:search) OR
                 LOWER(u.username) LIKE LOWER(:search) OR
                 LOWER(e.location_name) LIKE LOWER(:search)
             )""")
@@ -1059,7 +1159,7 @@ def filter_events():
         if min_price:
             filters.append("e.price >= :min_price")
             params["min_price"] = float(min_price)
-        
+
         if max_price:
             filters.append("e.price <= :max_price")
             params["max_price"] = float(max_price)
@@ -1080,13 +1180,13 @@ def filter_events():
 
         with current_app.engine.connect() as conn:
             base_query = f"""
-                SELECT 
+                SELECT
                     e.id,
                     e.title,
                     e.starts_at,
                     e.ends_at,
                     e.location_name,
-                    e.price,  
+                    e.price,
                     e.status,
                     e.created_at,
                     e.owner_type,
@@ -1102,9 +1202,9 @@ def filter_events():
                 {where_clause}
                 ORDER BY e.starts_at ASC
             """
-            
+
             count_query = f"""
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM events e
                 LEFT JOIN event_types et ON e.type_id = et.id
                 LEFT JOIN users u ON e.owner_user_id = u.id
@@ -1112,7 +1212,7 @@ def filter_events():
                 LEFT JOIN universities un ON u.university_id = un.id
                 {where_clause}
             """
-            
+
             result = paginate_query(conn, base_query, count_query, params)
             return jsonify(result)
 
@@ -1120,7 +1220,6 @@ def filter_events():
         return {"error": "Invalid format for price or ID fields"}, 400
     except Exception as e:
         return {"error": str(e)}, 503
-
 
 
 @events_bp.put("/<int:event_id>")
