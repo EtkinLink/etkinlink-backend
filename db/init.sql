@@ -256,12 +256,12 @@ CREATE TABLE reports (
   created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
-  CONSTRAINT fk_reports_event FOREIGN KEY (event_id) REFERENCES events(id)
-    ON UPDATE CASCADE ON DELETE CASCADE,
-  CONSTRAINT fk_reports_organization FOREIGN KEY (organization_id) REFERENCES organizations(id)
-    ON UPDATE CASCADE ON DELETE CASCADE,
-  CONSTRAINT fk_reports_user FOREIGN KEY (reporter_user_id) REFERENCES users(id)
-    ON UPDATE CASCADE ON DELETE CASCADE,
+  -- CONSTRAINT fk_reports_event FOREIGN KEY (event_id) REFERENCES events(id)
+  --   ON UPDATE CASCADE ON DELETE CASCADE,
+  -- CONSTRAINT fk_reports_organization FOREIGN KEY (organization_id) REFERENCES organizations(id)
+  --   ON UPDATE CASCADE ON DELETE CASCADE,
+  -- CONSTRAINT fk_reports_user FOREIGN KEY (reporter_user_id) REFERENCES users(id)
+  --   ON UPDATE CASCADE ON DELETE CASCADE,
     
   -- Ensure either event_id or organization_id is set, but not both
   CONSTRAINT chk_reports_target CHECK (
