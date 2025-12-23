@@ -629,72 +629,69 @@ def create_event():
         return {"error": str(e)}, 503
     
 
-
 @events_bp.post("/<int:event_id>/check-in")
 def check_in_participant(event_id):
-    """
-    Performs check-in for a participant by scanning their ticket_code.
-    Only event owners or organization admins/representatives can perform this.
-    """
+    
     try:
         admin_user_id = verify_jwt()
-        
         data = request.get_json()
+
         if not data or "ticket_code" not in data:
             return {"error": "ticket_code is required"}, 400
-        
+
         ticket_code = data.get("ticket_code")
 
         with current_app.engine.connect() as conn:
-            
-            try:
-                check_event_ownership(conn, event_id, admin_user_id)
-            except AuthError as auth_err:
-                return {"error": auth_err.args[0]}, auth_err.code
+            with conn.begin():
+                try:
+                    check_event_ownership(conn, event_id, admin_user_id)
+                except AuthError as auth_err:
+                    return {"error": auth_err.args[0]}, auth_err.code
 
-            with conn.begin() as trans:
-            
                 query = text("""
-                    SELECT 
+                    SELECT
                         p.status,
                         u.username,
                         u.name
                     FROM participants p
                     JOIN users u ON p.user_id = u.id
-                    WHERE p.ticket_code = :ticket_code AND p.event_id = :event_id
+                    WHERE p.ticket_code = :ticket_code
+                      AND p.event_id = :event_id
                     FOR UPDATE
                 """)
-                
+
                 participant = conn.execute(query, {
-                    "ticket_code": ticket_code, 
+                    "ticket_code": ticket_code,
                     "event_id": event_id
                 }).fetchone()
 
                 if not participant:
                     return {"error": "Invalid ticket or not for this event"}, 404
-                
+
                 if participant.status == 'ATTENDED':
-                    return {"error": f"Ticket already used by {participant.username}"}, 409
-                
+                    return {
+                        "error": f"Ticket already used by {participant.username}"
+                    }, 409
+
                 update_query = text("""
-                    UPDATE participants 
-                    SET status = 'ATTENDED' 
+                    UPDATE participants
+                    SET status = 'ATTENDED'
                     WHERE ticket_code = :ticket_code
                 """)
-                
+
                 conn.execute(update_query, {"ticket_code": ticket_code})
 
-
-        return {
-            "message": "Check-in successful", 
-            "username": participant.username,
-            "name": participant.name
-        }, 200
+                return {
+                    "message": "Check-in successful",
+                    "username": participant.username,
+                    "name": participant.name
+                }, 200
 
     except AuthError as e:
         return {"error": e.args[0]}, e.code
     except Exception as e:
         return {"error": f"An error occurred: {str(e)}"}, 503
+
     
 #manuel check in
 @events_bp.post("/<int:event_id>/manual-check-in")
