@@ -255,7 +255,11 @@ CREATE TABLE reports (
   admin_notes       TEXT,
   created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+<<<<<<< Updated upstream
   
+=======
+
+>>>>>>> Stashed changes
   INDEX idx_reports_status (status),
   INDEX idx_reports_is_reviewed (is_reviewed),
   INDEX idx_reports_created (created_at),
