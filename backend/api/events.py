@@ -902,7 +902,8 @@ def get_event_by_id(event_id):
             if show_participants:
                 participants = conn.execute(text("""
                     SELECT
-                        u.id,
+                        p.id AS id,
+                        p.user_id,
                         u.username,
                         p.status
                     FROM participants p
