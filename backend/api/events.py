@@ -1086,12 +1086,19 @@ def filter_events():
                     e.location_name,
                     e.price,  
                     e.status,
+                    e.latitude,
+                    e.longitude,
                     e.created_at,
                     e.owner_type,
                     u.username AS owner_username,
                     o.name AS owner_organization_name,
                     et.code AS event_type,
-                    un.name AS university_name
+                    un.name AS university_name,
+                    (
+                    SELECT COUNT(*)
+                    FROM participants p
+                    WHERE p.event_id = e.id
+                    ) AS participant_count
                 FROM events e
                 LEFT JOIN event_types et ON e.type_id = et.id
                 LEFT JOIN users u ON e.owner_user_id = u.id
