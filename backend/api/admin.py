@@ -129,36 +129,57 @@ def get_overview_charts():
 def get_all_events():
     """
     Get all events with details for admin management.
-    Supports pagination and filtering by status.
-    Query params: ?page=1&per_page=20&status=PENDING
+    Supports pagination, filtering by status, and search.
+    Query params:
+      ?page=1
+      &per_page=20
+      &status=PENDING
+      &search=keyword
     """
     try:
         status_filter = request.args.get("status")
+        search = request.args.get("search", "").strip()
         pagination_params = get_pagination_params()
-        
+
+        where_parts = []
+        params = {}
+
+        if status_filter:
+            where_parts.append("e.status = :status")
+            params["status"] = status_filter.upper()
+
+        if search:
+            where_parts.append("""
+                (
+                    e.title LIKE :search
+                    OR e.explanation LIKE :search
+                    OR o.name LIKE :search
+                    OR u.username LIKE :search
+                )
+            """)
+            params["search"] = f"%{search}%"
+
+        where_clause = ""
+        if where_parts:
+            where_clause = "WHERE " + " AND ".join(where_parts)
+
         with current_app.engine.connect() as conn:
-            # Build query with optional status filter
-            where_clause = ""
-            params = {}
-            
-            if status_filter:
-                where_clause = "WHERE e.status = :status"
-                params["status"] = status_filter.upper()
-            
             base_query = f"""
                 SELECT 
                     e.id,
                     e.title,
                     e.explanation,
                     e.owner_type,
-                    e.starts_at as date,
+                    e.starts_at AS date,
                     e.status,
-                    e.user_limit as capacity,
+                    e.user_limit AS capacity,
                     e.created_at,
-                    COALESCE(o.name, u.username) as owner_name,
+                    COALESCE(o.name, u.username) AS owner_name,
                     (
-                        SELECT COUNT(*) FROM participants p
-                        WHERE p.event_id = e.id AND p.status = 'ATTENDED'
+                        SELECT COUNT(*)
+                        FROM participants p
+                        WHERE p.event_id = e.id
+                          AND p.status = 'ATTENDED'
                     ) AS attendance_count
                 FROM events e
                 LEFT JOIN organizations o ON e.owner_organization_id = o.id
@@ -166,18 +187,28 @@ def get_all_events():
                 {where_clause}
                 ORDER BY e.created_at DESC
             """
-            
+
             count_query = f"""
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM events e
+                LEFT JOIN organizations o ON e.owner_organization_id = o.id
+                LEFT JOIN users u ON e.owner_user_id = u.id
                 {where_clause}
             """
-            
-            result = paginate_query(conn, base_query, count_query, params, pagination_params)
-            return jsonify(result)
-    
+
+            result = paginate_query(
+                conn,
+                base_query,
+                count_query,
+                params,
+                pagination_params
+            )
+
+            return jsonify(result), 200
+
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 
 @admin_bp.get("/events/<int:event_id>")
@@ -606,39 +637,69 @@ def get_all_clubs():
     """
     try:
         pagination_params = get_pagination_params()
-        
+
+        status = request.args.get("status")          # ACTIVE / INACTIVE
+        search = request.args.get("search", "").strip()
+
+        where_parts = []
+        params = {}
+
+        if status in ("ACTIVE", "INACTIVE"):
+            where_parts.append("o.status = :status")
+            params["status"] = status
+
+        if search:
+            where_parts.append("""
+                (
+                    o.name LIKE :search
+                    OR o.description LIKE :search
+                    OR u.username LIKE :search
+                )
+            """)
+            params["search"] = f"%{search}%"
+
+        where_sql = ""
+        if where_parts:
+            where_sql = "WHERE " + " AND ".join(where_parts)
+
+        base_query = f"""
+            SELECT 
+                o.id,
+                o.name,
+                o.description,
+                o.status,
+                o.photo_url,
+                o.created_at,
+                o.updated_at,
+                u.username AS admin_username,
+                (
+                    SELECT COUNT(*) FROM organization_members m
+                    WHERE m.organization_id = o.id
+                ) AS member_count,
+                (
+                    SELECT COUNT(*) FROM events e
+                    WHERE e.owner_organization_id = o.id
+                ) AS event_count
+            FROM organizations o
+            LEFT JOIN users u ON o.owner_user_id = u.id
+            {where_sql}
+            ORDER BY o.created_at DESC
+        """
+
+        count_query = f"""
+            SELECT COUNT(*)
+            FROM organizations o
+            LEFT JOIN users u ON o.owner_user_id = u.id
+            {where_sql}
+        """
+
         with current_app.engine.connect() as conn:
-            base_query = """
-                SELECT 
-                    o.id,
-                    o.name,
-                    o.description,
-                    o.status,
-                    o.created_at,
-                    u.username as admin_username,
-                    (
-                        SELECT COUNT(*) FROM organization_members m
-                        WHERE m.organization_id = o.id
-                    ) AS member_count,
-                    (
-                        SELECT COUNT(*) FROM events e
-                        WHERE e.owner_organization_id = o.id
-                    ) AS event_count
-                FROM organizations o
-                LEFT JOIN users u ON o.owner_user_id = u.id
-                ORDER BY o.created_at DESC
-            """
-            
-            count_query = """
-                SELECT COUNT(*) 
-                FROM organizations o
-            """
-            
-            result = paginate_query(conn, base_query, count_query, {}, pagination_params)
-            return jsonify(result)
-    
+            result = paginate_query(conn, base_query, count_query, params, pagination_params)
+            return jsonify(result), 200
+
     except Exception as e:
         return {"error": str(e)}, 503
+
 
 
 @admin_bp.get("/clubs/<int:club_id>")
